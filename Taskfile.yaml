@@ -1,0 +1,87 @@
+version: '3'
+
+vars:
+  BINARY: techne
+  MAIN_PATH: ./cmd/techne
+  BUILD_DIR: bin
+
+tasks:
+  build:
+    desc: Build the binary
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+      - go build -o {{.BUILD_DIR}}/{{.BINARY}} {{.MAIN_PATH}}
+    sources:
+      - '**/*.go'
+      - go.mod
+      - go.sum
+    generates:
+      - '{{.BUILD_DIR}}/{{.BINARY}}'
+
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -rf {{.BUILD_DIR}}
+      - rm -rf dist
+
+  lint:
+    desc: Run golangci-lint
+    cmds:
+      - golangci-lint run ./...
+    sources:
+      - '**/*.go'
+
+  test:
+    desc: Run tests
+    cmds:
+      - go test -v -race -coverprofile=coverage.out ./...
+    sources:
+      - '**/*.go'
+
+  test:coverage:
+    desc: Run tests with coverage report
+    cmds:
+      - go test -v -race -coverprofile=coverage.out ./...
+      - go tool cover -html=coverage.out -o coverage.html
+
+  deps:
+    desc: Install development dependencies
+    cmds:
+      - go mod download
+      - go mod tidy
+
+  fmt:
+    desc: Format code
+    cmds:
+      - go fmt ./...
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  dev:
+    desc: Run in development mode
+    deps:
+      - build
+    cmds:
+      - ./{{.BUILD_DIR}}/{{.BINARY}}
+
+  all:
+    desc: Run all checks (fmt, vet, lint, test, build)
+    cmds:
+      - task: fmt
+      - task: vet
+      - task: lint
+      - task: test
+      - task: build
+
+  release:
+    desc: Create a release with GoReleaser (snapshot)
+    cmds:
+      - goreleaser release --snapshot --clean
+
+  release:local:
+    desc: Build release binaries locally
+    cmds:
+      - goreleaser build --snapshot --clean

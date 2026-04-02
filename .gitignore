@@ -4,7 +4,6 @@
 *.dll
 *.so
 *.dylib
-techne
 /techne
 
 # Test binary

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	tea "charm.land/bubbletea/v2"
 
@@ -16,7 +17,6 @@ import (
 	"github.com/Edcko/techne-code/pkg/tool"
 )
 
-// State represents the current TUI state
 type State int
 
 const (
@@ -26,13 +26,11 @@ const (
 	StateExiting
 )
 
-// ChatMessage represents a message in the chat view
 type ChatMessage struct {
-	Role    string // "user", "assistant", "tool", "error"
+	Role    string
 	Content string
 }
 
-// Model is the root Bubbletea model for Techne Code
 type Model struct {
 	state  State
 	cfg    *config.Config
@@ -40,25 +38,25 @@ type Model struct {
 	client *llm.Client
 	store  session.SessionStore
 	bus    event.EventBus
-	unsub  func() // event bus unsubscribe
+	unsub  func()
 
-	// UI state
-	messages   []ChatMessage
-	input      string
-	statusText string
-	sessionID  string
-	err        error
+	program   *tea.Program
+	programMu sync.RWMutex
 
-	// Dimensions
+	messages         []ChatMessage
+	currentStreaming *int
+	input            string
+	statusText       string
+	sessionID        string
+	err              error
+
 	width  int
 	height int
 
-	// Context for cancellation
 	ctx    context.Context
 	cancel context.CancelFunc
 }
 
-// NewModel creates a new TUI model
 func NewModel(
 	cfg *config.Config,
 	agentClient *llm.Client,
@@ -82,14 +80,47 @@ func NewModel(
 	}
 }
 
-// Init initializes the TUI
+func (m *Model) SetProgram(p *tea.Program) {
+	m.programMu.Lock()
+	m.program = p
+	m.programMu.Unlock()
+}
+
+func (m *Model) getProgram() *tea.Program {
+	m.programMu.RLock()
+	defer m.programMu.RUnlock()
+	return m.program
+}
+
 func (m *Model) Init() tea.Cmd {
-	// Subscribe to events
 	m.unsub = m.bus.Subscribe(func(e event.Event) {
-		// Events are handled via poll in Update
+		p := m.getProgram()
+		if p == nil {
+			return
+		}
+
+		switch e.Type {
+		case event.EventMessageDelta:
+			if data, ok := e.Data.(event.MessageDeltaData); ok {
+				p.Send(messageDeltaMsg{text: data.Text})
+			}
+		case event.EventToolStart:
+			if data, ok := e.Data.(event.ToolStartData); ok {
+				p.Send(toolStartMsg{name: data.ToolName})
+			}
+		case event.EventToolResult:
+			if data, ok := e.Data.(event.ToolResultData); ok {
+				p.Send(toolResultMsg{name: data.ToolName, content: data.Content, isError: data.IsError})
+			}
+		case event.EventError:
+			if data, ok := e.Data.(event.ErrorData); ok {
+				p.Send(errorMsg{message: data.Message, fatal: data.Fatal})
+			}
+		case event.EventDone:
+			p.Send(doneMsg{})
+		}
 	})
 
-	// Create new session
 	sess := &session.Session{
 		Title:    "New Session",
 		Model:    m.cfg.DefaultModel,
@@ -107,7 +138,6 @@ func (m *Model) Init() tea.Cmd {
 	return nil
 }
 
-// Update handles messages
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -118,32 +148,63 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 
-	// Custom messages from event bus
-	case streamUpdateMsg:
-		m.messages = append(m.messages, ChatMessage{
-			Role:    "assistant",
-			Content: msg.text,
-		})
-		m.state = StateChatting
+	case messageDeltaMsg:
+		if m.currentStreaming != nil && *m.currentStreaming < len(m.messages) {
+			m.messages[*m.currentStreaming].Content += msg.text
+		} else {
+			idx := len(m.messages)
+			m.messages = append(m.messages, ChatMessage{
+				Role:    "assistant",
+				Content: msg.text,
+			})
+			m.currentStreaming = &idx
+		}
 		return m, nil
 
-	case streamErrMsg:
-		m.messages = append(m.messages, ChatMessage{
-			Role:    "error",
-			Content: msg.text,
-		})
-		m.state = StateChatting
-		return m, nil
-
-	case toolUpdateMsg:
+	case toolStartMsg:
 		m.messages = append(m.messages, ChatMessage{
 			Role:    "tool",
-			Content: fmt.Sprintf("▶ %s", msg.text),
+			Content: fmt.Sprintf("▶ %s", msg.name),
 		})
+		m.currentStreaming = nil
+		return m, nil
+
+	case toolResultMsg:
+		prefix := "✓"
+		if msg.isError {
+			prefix = "✗"
+		}
+		m.messages = append(m.messages, ChatMessage{
+			Role:    "tool",
+			Content: fmt.Sprintf("  %s %s: %s", prefix, msg.name, truncate(msg.content, 200)),
+		})
+		return m, nil
+
+	case errorMsg:
+		m.messages = append(m.messages, ChatMessage{
+			Role:    "error",
+			Content: msg.message,
+		})
+		m.currentStreaming = nil
+		if msg.fatal {
+			m.state = StateChatting
+		}
+		return m, nil
+
+	case doneMsg:
+		m.state = StateChatting
+		m.currentStreaming = nil
 		return m, nil
 	}
 
 	return m, nil
+}
+
+func truncate(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -188,30 +249,26 @@ func (m *Model) handleSubmit() (tea.Model, tea.Cmd) {
 		Content: prompt,
 	})
 	m.state = StateStreaming
+	m.currentStreaming = nil
 
-	// Run agent in background
 	go func() {
-		err := m.agent.Run(m.ctx, m.sessionID, prompt, agent.Config{
+		_ = m.agent.Run(m.ctx, m.sessionID, prompt, agent.Config{
 			Model:        m.cfg.DefaultModel,
 			MaxTokens:    4096,
 			SystemPrompt: buildSystemPrompt(),
 		})
-		_ = err // TODO: handle error via event bus
 	}()
 
 	return m, nil
 }
 
-// View renders the TUI
 func (m *Model) View() tea.View {
 	var b strings.Builder
 
-	// Header
 	b.WriteString(TitleStyle.Render("⚡ Techne Code"))
 	b.WriteString("\n\n")
 
-	// Chat messages
-	visibleHeight := m.height - 6 // header + input + status
+	visibleHeight := m.height - 6
 	if visibleHeight < 5 {
 		visibleHeight = 5
 	}
@@ -235,7 +292,6 @@ func (m *Model) View() tea.View {
 		b.WriteString("\n")
 	}
 
-	// Streaming indicator
 	if m.state == StateStreaming {
 		b.WriteString(DimStyle.Render("● Thinking..."))
 		b.WriteString("\n")
@@ -243,7 +299,6 @@ func (m *Model) View() tea.View {
 
 	b.WriteString("\n")
 
-	// Input
 	prompt := "> "
 	if m.state == StateChatting {
 		b.WriteString(InputPromptStyle.Render(prompt + m.input + "█"))
@@ -252,7 +307,6 @@ func (m *Model) View() tea.View {
 	}
 	b.WriteString("\n")
 
-	// Status bar
 	help := "ctrl+c: quit | enter: send"
 	if m.state == StateStreaming {
 		help = "ctrl+c: cancel"
@@ -262,12 +316,19 @@ func (m *Model) View() tea.View {
 	return tea.NewView(b.String())
 }
 
-// custom message types for event bus → Bubbletea bridge
-type streamUpdateMsg struct{ text string }
-type streamErrMsg struct{ text string }
-type toolUpdateMsg struct{ text string }
+type messageDeltaMsg struct{ text string }
+type toolStartMsg struct{ name string }
+type toolResultMsg struct {
+	name    string
+	content string
+	isError bool
+}
+type errorMsg struct {
+	message string
+	fatal   bool
+}
+type doneMsg struct{}
 
-// buildSystemPrompt creates the system prompt for the agent
 func buildSystemPrompt() string {
 	return `You are Techne Code, an expert AI coding assistant. You help developers write, review, debug, and understand code.
 
@@ -281,7 +342,6 @@ Guidelines:
 - Prefer small, focused changes over large rewrites`
 }
 
-// Client returns the LLM client (for external access)
 func (m *Model) Client() *llm.Client {
 	return m.client
 }

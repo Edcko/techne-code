@@ -17,6 +17,8 @@ import (
 	"github.com/Edcko/techne-code/internal/llm/providers/anthropic"
 	"github.com/Edcko/techne-code/internal/llm/providers/openai"
 	"github.com/Edcko/techne-code/internal/permission"
+	"github.com/Edcko/techne-code/internal/skills"
+	"github.com/Edcko/techne-code/internal/skills/builtin"
 	"github.com/Edcko/techne-code/internal/tools"
 	"github.com/Edcko/techne-code/pkg/event"
 	"github.com/Edcko/techne-code/pkg/provider"
@@ -103,14 +105,15 @@ func runInteractive(ctx context.Context, cfg *config.Config) error {
 	registry.Register(&tools.GrepTool{})
 	registry.Register(&tools.GlobTool{})
 
-	// 6. Setup permissions
+	skillRegistry := skills.NewRegistry()
+	_ = builtin.RegisterAll(skillRegistry)
+
 	perm := permission.NewService(
 		permission.Mode(cfg.Permissions.Mode),
 		cfg.Permissions.AllowedTools,
 	)
 
-	// 7. Create and run TUI
-	model := tui.NewModel(cfg, client, store, registry, perm, bus)
+	model := tui.NewModel(cfg, client, store, registry, perm, bus, skillRegistry)
 	program := tea.NewProgram(model)
 	model.SetProgram(program)
 
@@ -167,9 +170,13 @@ func runNonInteractive(ctx context.Context, cfg *config.Config, prompt string) e
 	registry.Register(&tools.GrepTool{})
 	registry.Register(&tools.GlobTool{})
 
+	skillRegistry := skills.NewRegistry()
+	_ = builtin.RegisterAll(skillRegistry)
+
 	perm := permission.NewService(permission.ModeAutoAllow, nil)
 
 	ag := agent.New(client, store, registry, perm, bus)
+	ag.WithSkills(skillRegistry)
 
 	sess := &session.Session{
 		Title:    "Non-interactive",
@@ -184,6 +191,10 @@ func runNonInteractive(ctx context.Context, cfg *config.Config, prompt string) e
 	bus.Subscribe(func(e event.Event) {
 		switch e.Type {
 		case event.EventMessageDelta:
+			if data, ok := e.Data.(event.ThinkingDeltaData); ok {
+				_ = data
+				return
+			}
 			if data, ok := e.Data.(event.MessageDeltaData); ok {
 				fmt.Print(data.Text)
 			}

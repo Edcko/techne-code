@@ -11,16 +11,18 @@ import (
 	"github.com/Edcko/techne-code/pkg/event"
 	"github.com/Edcko/techne-code/pkg/provider"
 	"github.com/Edcko/techne-code/pkg/session"
+	"github.com/Edcko/techne-code/pkg/skill"
 	"github.com/Edcko/techne-code/pkg/tool"
 )
 
 // Agent is the core AI coding agent that runs the conversation loop.
 type Agent struct {
-	client     *llm.Client
-	store      session.SessionStore
-	registry   tool.ToolRegistry
-	permission *permission.Service
-	bus        event.EventBus
+	client        *llm.Client
+	store         session.SessionStore
+	registry      tool.ToolRegistry
+	permission    *permission.Service
+	bus           event.EventBus
+	skillRegistry skill.SkillRegistry
 }
 
 // Config holds agent configuration.
@@ -46,6 +48,10 @@ func New(
 		permission: perm,
 		bus:        bus,
 	}
+}
+
+func (a *Agent) WithSkills(registry skill.SkillRegistry) {
+	a.skillRegistry = registry
 }
 
 // Run executes the agent loop for a user prompt.
@@ -77,11 +83,21 @@ func (a *Agent) Run(ctx context.Context, sessionID string, userPrompt string, co
 			return fmt.Errorf("load messages: %w", err)
 		}
 
-		// Build request
+		systemPrompt := config.SystemPrompt
+		if a.skillRegistry != nil {
+			skillCtx := skill.SkillContext{
+				UserMessage: userPrompt,
+			}
+			skillPrompt := a.skillRegistry.BuildSystemPrompt(ctx, skillCtx)
+			if skillPrompt != "" {
+				systemPrompt = systemPrompt + skillPrompt
+			}
+		}
+
 		req := provider.ChatRequest{
 			Messages: messages,
 			Tools:    a.registry.Schemas(),
-			System:   config.SystemPrompt,
+			System:   systemPrompt,
 			Config: provider.ProviderConfig{
 				Model:     config.Model,
 				MaxTokens: config.MaxTokens,

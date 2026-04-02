@@ -14,6 +14,7 @@ import (
 	"github.com/Edcko/techne-code/internal/permission"
 	"github.com/Edcko/techne-code/pkg/event"
 	"github.com/Edcko/techne-code/pkg/session"
+	"github.com/Edcko/techne-code/pkg/skill"
 	"github.com/Edcko/techne-code/pkg/tool"
 )
 
@@ -27,24 +28,27 @@ const (
 )
 
 type ChatMessage struct {
-	Role    string
-	Content string
+	Role     string
+	Content  string
+	Thinking string
 }
 
 type Model struct {
-	state  State
-	cfg    *config.Config
-	agent  *agent.Agent
-	client *llm.Client
-	store  session.SessionStore
-	bus    event.EventBus
-	unsub  func()
+	state         State
+	cfg           *config.Config
+	agent         *agent.Agent
+	client        *llm.Client
+	store         session.SessionStore
+	bus           event.EventBus
+	unsub         func()
+	skillRegistry skill.SkillRegistry
 
 	program   *tea.Program
 	programMu sync.RWMutex
 
 	messages         []ChatMessage
 	currentStreaming *int
+	thinkingBuffer   string
 	input            string
 	statusText       string
 	sessionID        string
@@ -64,19 +68,23 @@ func NewModel(
 	registry tool.ToolRegistry,
 	perm *permission.Service,
 	bus event.EventBus,
+	skillRegistry skill.SkillRegistry,
 ) *Model {
 	ctx, cancel := context.WithCancel(context.Background())
+	ag := agent.New(agentClient, store, registry, perm, bus)
+	ag.WithSkills(skillRegistry)
 	return &Model{
-		state:    StateInit,
-		cfg:      cfg,
-		client:   agentClient,
-		store:    store,
-		bus:      bus,
-		agent:    agent.New(agentClient, store, registry, perm, bus),
-		ctx:      ctx,
-		cancel:   cancel,
-		messages: []ChatMessage{},
-		input:    "",
+		state:         StateInit,
+		cfg:           cfg,
+		client:        agentClient,
+		store:         store,
+		bus:           bus,
+		skillRegistry: skillRegistry,
+		agent:         ag,
+		ctx:           ctx,
+		cancel:        cancel,
+		messages:      []ChatMessage{},
+		input:         "",
 	}
 }
 
@@ -101,6 +109,10 @@ func (m *Model) Init() tea.Cmd {
 
 		switch e.Type {
 		case event.EventMessageDelta:
+			if data, ok := e.Data.(event.ThinkingDeltaData); ok {
+				p.Send(thinkingDeltaMsg{text: data.Text})
+				return
+			}
 			if data, ok := e.Data.(event.MessageDeltaData); ok {
 				p.Send(messageDeltaMsg{text: data.Text})
 			}
@@ -148,16 +160,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 
+	case thinkingDeltaMsg:
+		m.thinkingBuffer += msg.text
+		return m, nil
+
 	case messageDeltaMsg:
 		if m.currentStreaming != nil && *m.currentStreaming < len(m.messages) {
 			m.messages[*m.currentStreaming].Content += msg.text
 		} else {
 			idx := len(m.messages)
 			m.messages = append(m.messages, ChatMessage{
-				Role:    "assistant",
-				Content: msg.text,
+				Role:     "assistant",
+				Content:  msg.text,
+				Thinking: m.thinkingBuffer,
 			})
 			m.currentStreaming = &idx
+			m.thinkingBuffer = ""
 		}
 		return m, nil
 
@@ -252,10 +270,20 @@ func (m *Model) handleSubmit() (tea.Model, tea.Cmd) {
 	m.currentStreaming = nil
 
 	go func() {
+		systemPrompt := buildSystemPrompt()
+		if m.skillRegistry != nil {
+			skillCtx := skill.SkillContext{
+				UserMessage: prompt,
+			}
+			skillPrompt := m.skillRegistry.BuildSystemPrompt(m.ctx, skillCtx)
+			if skillPrompt != "" {
+				systemPrompt = systemPrompt + skillPrompt
+			}
+		}
 		_ = m.agent.Run(m.ctx, m.sessionID, prompt, agent.Config{
 			Model:        m.cfg.DefaultModel,
 			MaxTokens:    4096,
-			SystemPrompt: buildSystemPrompt(),
+			SystemPrompt: systemPrompt,
 		})
 	}()
 
@@ -283,6 +311,10 @@ func (m *Model) View() tea.View {
 		case "user":
 			b.WriteString(UserMessageStyle.Render("You: " + msg.Content))
 		case "assistant":
+			if msg.Thinking != "" {
+				b.WriteString(DimStyle.Render("💭 " + msg.Thinking))
+				b.WriteString("\n")
+			}
 			b.WriteString(AssistantMessageStyle.Render("Assistant: " + msg.Content))
 		case "tool":
 			b.WriteString(ToolMessageStyle.Render(msg.Content))
@@ -293,8 +325,13 @@ func (m *Model) View() tea.View {
 	}
 
 	if m.state == StateStreaming {
-		b.WriteString(DimStyle.Render("● Thinking..."))
-		b.WriteString("\n")
+		if m.thinkingBuffer != "" {
+			b.WriteString(DimStyle.Render("💭 " + m.thinkingBuffer))
+			b.WriteString("\n")
+		} else {
+			b.WriteString(DimStyle.Render("● Thinking..."))
+			b.WriteString("\n")
+		}
 	}
 
 	b.WriteString("\n")
@@ -317,6 +354,7 @@ func (m *Model) View() tea.View {
 }
 
 type messageDeltaMsg struct{ text string }
+type thinkingDeltaMsg struct{ text string }
 type toolStartMsg struct{ name string }
 type toolResultMsg struct {
 	name    string

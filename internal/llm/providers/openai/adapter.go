@@ -21,9 +21,17 @@ type Adapter struct {
 	models  []provider.ModelInfo
 }
 
-func NewAdapter(apiKey, baseURL string) *Adapter {
+func NewAdapter(apiKey, baseURL string, models []provider.ModelInfo) *Adapter {
 	if baseURL == "" {
 		baseURL = "https://api.z.ai/api/coding/paas/v4"
+	}
+
+	if len(models) == 0 {
+		models = []provider.ModelInfo{
+			{ID: "glm-5", MaxTokens: 4096, SupportsTools: true, SupportsVision: false, ContextWindow: 128000},
+			{ID: "glm-4.6", MaxTokens: 4096, SupportsTools: true, SupportsVision: false, ContextWindow: 128000},
+			{ID: "glm-4.7", MaxTokens: 4096, SupportsTools: true, SupportsVision: false, ContextWindow: 128000},
+		}
 	}
 
 	return &Adapter{
@@ -35,11 +43,7 @@ func NewAdapter(apiKey, baseURL string) *Adapter {
 				ResponseHeaderTimeout: 30 * time.Second,
 			},
 		},
-		models: []provider.ModelInfo{
-			{ID: "glm-5", MaxTokens: 4096, SupportsTools: true, SupportsVision: false, ContextWindow: 128000},
-			{ID: "glm-4.6", MaxTokens: 4096, SupportsTools: true, SupportsVision: false, ContextWindow: 128000},
-			{ID: "glm-4.7", MaxTokens: 4096, SupportsTools: true, SupportsVision: false, ContextWindow: 128000},
-		},
+		models: models,
 	}
 }
 

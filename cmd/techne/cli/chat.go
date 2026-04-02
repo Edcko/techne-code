@@ -15,6 +15,7 @@ import (
 	eventbus "github.com/Edcko/techne-code/internal/event"
 	"github.com/Edcko/techne-code/internal/llm"
 	"github.com/Edcko/techne-code/internal/llm/providers/anthropic"
+	"github.com/Edcko/techne-code/internal/llm/providers/ollama"
 	"github.com/Edcko/techne-code/internal/llm/providers/openai"
 	"github.com/Edcko/techne-code/internal/permission"
 	"github.com/Edcko/techne-code/internal/skills"
@@ -88,7 +89,9 @@ func runInteractive(ctx context.Context, cfg *config.Config) error {
 	case "anthropic":
 		prov = anthropic.New(apiKey)
 	case "openai":
-		prov = openai.NewAdapter(apiKey, providerCfg.BaseURL)
+		prov = openai.NewAdapter(apiKey, providerCfg.BaseURL, nil)
+	case "ollama":
+		prov = ollama.New(providerCfg.BaseURL)
 	default:
 		return fmt.Errorf("unsupported provider type: %q", providerCfg.Type)
 	}
@@ -156,7 +159,9 @@ func runNonInteractive(ctx context.Context, cfg *config.Config, prompt string) e
 	case "anthropic":
 		prov = anthropic.New(apiKey)
 	case "openai":
-		prov = openai.NewAdapter(apiKey, providerCfg.BaseURL)
+		prov = openai.NewAdapter(apiKey, providerCfg.BaseURL, nil)
+	case "ollama":
+		prov = ollama.New(providerCfg.BaseURL)
 	default:
 		return fmt.Errorf("unsupported provider type: %q", providerCfg.Type)
 	}

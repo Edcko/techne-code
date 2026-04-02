@@ -19,6 +19,9 @@ type Config struct {
 	// Permissions contains the permission system configuration.
 	Permissions PermissionsConfig `koanf:"permissions"`
 
+	// Skills contains the skill system configuration.
+	Skills SkillsConfig `koanf:"skills"`
+
 	// Options contains general configuration options.
 	Options OptionsConfig `koanf:"options"`
 }
@@ -51,6 +54,25 @@ type PermissionsConfig struct {
 	// AllowedTools is a list of tools that are automatically approved.
 	// These tools bypass the permission check.
 	AllowedTools []string `koanf:"allowed_tools"`
+}
+
+// SkillsConfig contains the skill system configuration.
+type SkillsConfig struct {
+	// Enabled is a list of skill names to explicitly enable.
+	// If empty, all skills are enabled by default.
+	Enabled []string `koanf:"enabled"`
+
+	// Disabled is a list of skill names to explicitly disable.
+	// These skills will not be activated even if their triggers match.
+	Disabled []string `koanf:"disabled"`
+
+	// UserSkillsPath is the path to user-defined skills directory.
+	// Default: ~/.config/techne/skills/
+	UserSkillsPath string `koanf:"user_skills_path"`
+
+	// ProjectSkillsPath is the path to project-specific skills directory.
+	// Default: .techne/skills/
+	ProjectSkillsPath string `koanf:"project_skills_path"`
 }
 
 // OptionsConfig contains general configuration options.

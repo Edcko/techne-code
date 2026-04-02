@@ -87,7 +87,7 @@ func runSessionList(cmd *cobra.Command, args []string) error {
 		if len(title) > 40 {
 			title = title[:37] + "..."
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%d\n", sess.ID[:8], title, created, len(messages))
+		fmt.Fprintf(w, "%s\t%s\t%s\t%d\n", sess.ID, title, created, len(messages))
 	}
 
 	return w.Flush()

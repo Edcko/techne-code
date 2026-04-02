@@ -200,6 +200,13 @@ func (a *Adapter) processStream(reader io.Reader, ch chan<- provider.StreamChunk
 		choice := chunk.Choices[0]
 		delta := choice.Delta
 
+		if delta.ReasoningContent != "" {
+			ch <- provider.StreamChunk{
+				Type:     "thinking_delta",
+				Thinking: delta.ReasoningContent,
+			}
+		}
+
 		if delta.Content != nil {
 			if content, ok := delta.Content.(string); ok && content != "" {
 				ch <- provider.StreamChunk{

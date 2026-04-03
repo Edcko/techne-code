@@ -250,6 +250,11 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.input = m.input[:len(m.input)-1]
 		}
 
+	case "space":
+		if m.state == StateChatting {
+			m.input += " "
+		}
+
 	default:
 		if m.state == StateChatting && msg.String() != "" && len(msg.String()) == 1 {
 			m.input += msg.String()

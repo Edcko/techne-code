@@ -38,9 +38,9 @@ func NewAdapter(apiKey, baseURL string, models []provider.ModelInfo) *Adapter {
 		apiKey:  apiKey,
 		baseURL: strings.TrimSuffix(baseURL, "/"),
 		client: &http.Client{
-			Timeout: 5 * time.Minute,
+			Timeout: 10 * time.Minute,
 			Transport: &http.Transport{
-				ResponseHeaderTimeout: 30 * time.Second,
+				ResponseHeaderTimeout: 5 * time.Minute,
 			},
 		},
 		models: models,

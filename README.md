@@ -157,8 +157,52 @@ techne version                   # Show version
 ### Ollama
 
 - Runs locally at `http://localhost:11434/v1`
-- No API key required (uses dummy value "ollama")
+- **No API key required**
+- **Chat-only mode by default** (tools disabled)
 - Available models: `llama3`, `llama3.1`, `llama3.2`, `codellama`, `deepseek-coder`, `qwen2.5-coder`, `mistral`
+
+#### Using Ollama
+
+1. **Install and start Ollama**:
+   ```bash
+   # Install Ollama (visit https://ollama.ai for instructions)
+   # Start the Ollama service
+   ollama serve
+   ```
+
+2. **Pull a model**:
+   ```bash
+   ollama pull qwen2.5-coder
+   ```
+
+3. **Run Techne Code with Ollama**:
+   ```bash
+   # Configure in techne.json
+   {
+     "default_provider": "ollama",
+     "default_model": "qwen2.5-coder",
+     "providers": {
+       "ollama": {
+         "type": "ollama",
+         "base_url": "http://localhost:11434/v1"
+       }
+     }
+   }
+   
+   # Run in chat-only mode (default for Ollama)
+   techne chat --provider ollama --model qwen2.5-coder -p "Explain Go interfaces"
+   
+   # Or start interactive session
+   techne chat
+   ```
+
+4. **Force disable tools for other providers**:
+   ```bash
+   # Use --no-tools flag with any provider
+   techne chat --provider openai --model glm-5 --no-tools -p "Hello"
+   ```
+
+**Note**: Cloud providers like GLM, OpenAI, and Anthropic have tools enabled by default for full coding assistance capabilities.
 
 ## Architecture
 

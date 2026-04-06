@@ -41,6 +41,28 @@ type ProviderConfig struct {
 
 	// Models is a list of available models for this provider.
 	Models []string `koanf:"models"`
+
+	// ToolsEnabled determines whether tool use is enabled for this provider.
+	// When false, the agent operates in chat-only mode without tool schemas.
+	// Defaults: true for anthropic/openai, false for ollama.
+	ToolsEnabled *bool `koanf:"tools_enabled"`
+}
+
+// GetToolsEnabled returns the effective tools_enabled setting for this provider.
+// If not explicitly set, it returns the default based on provider type:
+// - anthropic, openai: true
+// - ollama: false
+func (p ProviderConfig) GetToolsEnabled() bool {
+	if p.ToolsEnabled != nil {
+		return *p.ToolsEnabled
+	}
+
+	switch p.Type {
+	case "ollama":
+		return false
+	default:
+		return true
+	}
 }
 
 // PermissionsConfig contains the permission system configuration.

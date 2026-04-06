@@ -30,7 +30,8 @@ type Config struct {
 	Model         string
 	MaxTokens     int
 	SystemPrompt  string
-	MaxIterations int // max tool call iterations (default 50)
+	MaxIterations int
+	ToolsEnabled  bool
 }
 
 // New creates a new Agent.
@@ -96,12 +97,15 @@ func (a *Agent) Run(ctx context.Context, sessionID string, userPrompt string, co
 
 		req := provider.ChatRequest{
 			Messages: messages,
-			Tools:    a.registry.Schemas(),
 			System:   systemPrompt,
 			Config: provider.ProviderConfig{
 				Model:     config.Model,
 				MaxTokens: config.MaxTokens,
 			},
+		}
+
+		if config.ToolsEnabled {
+			req.Tools = a.registry.Schemas()
 		}
 
 		// Call LLM with streaming

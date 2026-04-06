@@ -1,9 +1,69 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
+	"time"
+
+	"github.com/Edcko/techne-code/internal/event"
+	"github.com/Edcko/techne-code/internal/llm"
+	"github.com/Edcko/techne-code/internal/tools"
+	"github.com/Edcko/techne-code/pkg/provider"
+	"github.com/Edcko/techne-code/pkg/session"
+	"github.com/Edcko/techne-code/pkg/tool"
 )
+
+type MockProvider struct {
+	LastRequest *provider.ChatRequest
+}
+
+func (m *MockProvider) Name() string {
+	return "mock"
+}
+
+func (m *MockProvider) Chat(ctx context.Context, req provider.ChatRequest) (*provider.ChatResponse, error) {
+	m.LastRequest = &req
+	return &provider.ChatResponse{
+		Content: []provider.ContentBlock{
+			{Type: provider.BlockText, Text: "test response"},
+		},
+		Usage: provider.Usage{
+			InputTokens:  10,
+			OutputTokens: 5,
+		},
+		Model:      "mock-model",
+		StopReason: "end_turn",
+	}, nil
+}
+
+func (m *MockProvider) Stream(ctx context.Context, req provider.ChatRequest) (<-chan provider.StreamChunk, error) {
+	m.LastRequest = &req
+	ch := make(chan provider.StreamChunk)
+	go func() {
+		defer close(ch)
+		ch <- provider.StreamChunk{
+			Type: "text_delta",
+			Text: "test response",
+		}
+		ch <- provider.StreamChunk{
+			Type: "done",
+		}
+	}()
+	return ch, nil
+}
+
+func (m *MockProvider) Models() []provider.ModelInfo {
+	return []provider.ModelInfo{
+		{
+			ID:             "mock-model",
+			MaxTokens:      4096,
+			SupportsTools:  true,
+			SupportsVision: false,
+			ContextWindow:  8192,
+		},
+	}
+}
 
 func TestToolCallHash(t *testing.T) {
 	hash1 := toolCallHash("read_file", json.RawMessage(`{"path":"/tmp/a.go"}`))
@@ -70,5 +130,221 @@ func TestToJSON_Nil(t *testing.T) {
 	result := toJSON(nil)
 	if string(result) != "null" {
 		t.Errorf("unexpected JSON for nil: %s", result)
+	}
+}
+
+type MockStore struct {
+	messages map[string][]session.StoredMessage
+	sessions map[string]*session.Session
+	readFile map[string]map[string]bool
+}
+
+func NewMockStore() *MockStore {
+	return &MockStore{
+		messages: make(map[string][]session.StoredMessage),
+		sessions: make(map[string]*session.Session),
+		readFile: make(map[string]map[string]bool),
+	}
+}
+
+func (m *MockStore) CreateSession(s *session.Session) error {
+	m.sessions[s.ID] = s
+	return nil
+}
+
+func (m *MockStore) GetSession(id string) (*session.Session, error) {
+	return m.sessions[id], nil
+}
+
+func (m *MockStore) ListSessions() ([]session.Session, error) {
+	var result []session.Session
+	for _, s := range m.sessions {
+		result = append(result, *s)
+	}
+	return result, nil
+}
+
+func (m *MockStore) UpdateSessionTitle(id, title string) error {
+	if s, ok := m.sessions[id]; ok {
+		s.Title = title
+	}
+	return nil
+}
+
+func (m *MockStore) UpdateSessionSummary(id, summaryMessageID string) error {
+	if s, ok := m.sessions[id]; ok {
+		s.SummaryMessageID = &summaryMessageID
+	}
+	return nil
+}
+
+func (m *MockStore) DeleteSession(id string) error {
+	delete(m.sessions, id)
+	delete(m.messages, id)
+	return nil
+}
+
+func (m *MockStore) SaveMessage(msg *session.StoredMessage) error {
+	m.messages[msg.SessionID] = append(m.messages[msg.SessionID], *msg)
+	return nil
+}
+
+func (m *MockStore) GetMessages(sessionID string) ([]session.StoredMessage, error) {
+	return m.messages[sessionID], nil
+}
+
+func (m *MockStore) GetMessagesAfter(sessionID string, after time.Time) ([]session.StoredMessage, error) {
+	var result []session.StoredMessage
+	for _, msg := range m.messages[sessionID] {
+		if msg.CreatedAt.After(after) {
+			result = append(result, msg)
+		}
+	}
+	return result, nil
+}
+
+func (m *MockStore) DeleteMessages(sessionID string) error {
+	m.messages[sessionID] = nil
+	return nil
+}
+
+func (m *MockStore) TrackReadFile(sessionID, path string) error {
+	if m.readFile[sessionID] == nil {
+		m.readFile[sessionID] = make(map[string]bool)
+	}
+	m.readFile[sessionID][path] = true
+	return nil
+}
+
+func (m *MockStore) HasReadFile(sessionID, path string) (bool, error) {
+	if m.readFile[sessionID] == nil {
+		return false, nil
+	}
+	return m.readFile[sessionID][path], nil
+}
+
+type MockTool struct {
+	name        string
+	description string
+	parameters  json.RawMessage
+}
+
+func (m *MockTool) Name() string                { return m.name }
+func (m *MockTool) Description() string         { return m.description }
+func (m *MockTool) Parameters() json.RawMessage { return m.parameters }
+func (m *MockTool) Execute(ctx context.Context, input json.RawMessage) (tool.ToolResult, error) {
+	return tool.ToolResult{Content: "mock result"}, nil
+}
+func (m *MockTool) RequiresPermission() bool { return false }
+
+func TestAgentToolInjection(t *testing.T) {
+	testCases := []struct {
+		name             string
+		toolsEnabled     bool
+		registerTools    bool
+		expectTools      bool
+		expectToolsCount int
+	}{
+		{
+			name:             "ToolsEnabled_true_with_tools_in_registry",
+			toolsEnabled:     true,
+			registerTools:    true,
+			expectTools:      true,
+			expectToolsCount: 2,
+		},
+		{
+			name:             "ToolsEnabled_false_no_tools_injected",
+			toolsEnabled:     false,
+			registerTools:    true,
+			expectTools:      false,
+			expectToolsCount: 0,
+		},
+		{
+			name:             "ToolsEnabled_true_empty_registry",
+			toolsEnabled:     true,
+			registerTools:    false,
+			expectTools:      false,
+			expectToolsCount: 0,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			mockProvider := &MockProvider{}
+			mockStore := NewMockStore()
+			bus := event.NewChannelEventBus()
+			defer bus.Close()
+
+			registry := tools.NewRegistry()
+			if tc.registerTools {
+				tool1 := &MockTool{
+					name:        "read_file",
+					description: "Read a file",
+					parameters:  json.RawMessage(`{"type":"object"}`),
+				}
+				tool2 := &MockTool{
+					name:        "write_file",
+					description: "Write a file",
+					parameters:  json.RawMessage(`{"type":"object"}`),
+				}
+				if err := registry.Register(tool1); err != nil {
+					t.Fatalf("failed to register tool1: %v", err)
+				}
+				if err := registry.Register(tool2); err != nil {
+					t.Fatalf("failed to register tool2: %v", err)
+				}
+			}
+
+			client := llm.NewClient(mockProvider, bus)
+			ag := New(client, mockStore, registry, nil, bus)
+
+			sessionID := "test-session"
+			err := mockStore.CreateSession(&session.Session{
+				ID:        sessionID,
+				CreatedAt: time.Now(),
+				UpdatedAt: time.Now(),
+			})
+			if err != nil {
+				t.Fatalf("failed to create session: %v", err)
+			}
+
+			config := Config{
+				Model:         "mock-model",
+				MaxTokens:     100,
+				SystemPrompt:  "test",
+				MaxIterations: 1,
+				ToolsEnabled:  tc.toolsEnabled,
+			}
+
+			ctx := context.Background()
+			err = ag.Run(ctx, sessionID, "test prompt", config)
+			if err != nil {
+				t.Logf("agent run returned: %v (expected for mock)", err)
+			}
+
+			if mockProvider.LastRequest == nil {
+				t.Fatal("LastRequest is nil - agent did not call provider")
+			}
+
+			toolsCount := len(mockProvider.LastRequest.Tools)
+			if tc.expectTools {
+				if toolsCount != tc.expectToolsCount {
+					t.Errorf("expected %d tools, got %d", tc.expectToolsCount, toolsCount)
+				}
+				if toolsCount > 0 {
+					foundNames := make(map[string]bool)
+					for _, td := range mockProvider.LastRequest.Tools {
+						foundNames[td.Name] = true
+					}
+					if !foundNames["read_file"] || !foundNames["write_file"] {
+						t.Errorf("expected tools read_file and write_file, got: %+v", mockProvider.LastRequest.Tools)
+					}
+				}
+			} else {
+				if toolsCount != 0 {
+					t.Errorf("expected no tools (0), got %d tools", toolsCount)
+				}
+			}
+		})
 	}
 }

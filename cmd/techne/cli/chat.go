@@ -35,25 +35,34 @@ func newChatCmd(ctx context.Context) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg := getConfig(cmd)
 
-			// Check for non-interactive mode
 			prompt, _ := cmd.Flags().GetString("prompt")
+			noTools, _ := cmd.Flags().GetBool("no-tools")
+
 			if prompt != "" {
-				return runNonInteractive(ctx, cfg, prompt)
+				return runNonInteractive(ctx, cfg, prompt, noTools)
 			}
 
-			return runInteractive(ctx, cfg)
+			return runInteractive(ctx, cfg, noTools)
 		},
 	}
 
 	cmd.Flags().StringP("prompt", "p", "", "Non-interactive: send a prompt and exit")
 	cmd.Flags().String("session", "", "Resume a specific session")
 	cmd.Flags().Bool("new-session", false, "Force create a new session")
+	cmd.Flags().Bool("no-tools", false, "Disable tool use (chat-only mode)")
 
 	return cmd
 }
 
-func runInteractive(ctx context.Context, cfg *config.Config) error {
-	// 1. Setup database
+func validateAPIKey(apiKey string, providerType string, providerName string) error {
+	if apiKey == "" && providerType != "ollama" {
+		envKey := "TECHNE_" + strings.ToUpper(providerName) + "_API_KEY"
+		return fmt.Errorf("API key not found for provider %q. Set %s env var", providerName, envKey)
+	}
+	return nil
+}
+
+func runInteractive(ctx context.Context, cfg *config.Config, noTools bool) error {
 	dataDir := cfg.Options.DataDirectory
 	if dataDir == "" {
 		dataDir = ".techne"
@@ -66,10 +75,8 @@ func runInteractive(ctx context.Context, cfg *config.Config) error {
 	}
 	store := db.NewSessionStore(database)
 
-	// 2. Setup event bus
 	bus := eventbus.NewChannelEventBus()
 
-	// 3. Setup provider
 	providerCfg, ok := cfg.Providers[cfg.DefaultProvider]
 	if !ok {
 		return fmt.Errorf("provider %q not found in config", cfg.DefaultProvider)
@@ -80,8 +87,9 @@ func runInteractive(ctx context.Context, cfg *config.Config) error {
 	if apiKey == "" {
 		apiKey = os.Getenv(envKey)
 	}
-	if apiKey == "" {
-		return fmt.Errorf("API key not found for provider %q. Set %s env var", cfg.DefaultProvider, envKey)
+
+	if err := validateAPIKey(apiKey, providerCfg.Type, cfg.DefaultProvider); err != nil {
+		return err
 	}
 
 	var prov provider.Provider
@@ -96,10 +104,8 @@ func runInteractive(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("unsupported provider type: %q", providerCfg.Type)
 	}
 
-	// 4. Setup LLM client
 	client := llm.NewClient(prov, bus)
 
-	// 5. Setup tool registry
 	registry := tools.NewRegistry()
 	registry.Register(&tools.ReadFileTool{})
 	registry.Register(&tools.WriteFileTool{})
@@ -116,7 +122,9 @@ func runInteractive(ctx context.Context, cfg *config.Config) error {
 		cfg.Permissions.AllowedTools,
 	)
 
-	model := tui.NewModel(cfg, client, store, registry, perm, bus, skillRegistry)
+	toolsEnabled := !noTools && providerCfg.GetToolsEnabled()
+
+	model := tui.NewModel(cfg, client, store, registry, perm, bus, skillRegistry, toolsEnabled)
 	program := tea.NewProgram(model)
 	model.SetProgram(program)
 
@@ -124,11 +132,11 @@ func runInteractive(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("TUI error: %w", err)
 	}
 
+	_ = toolsEnabled
 	return nil
 }
 
-func runNonInteractive(ctx context.Context, cfg *config.Config, prompt string) error {
-	// Setup same as interactive but without TUI
+func runNonInteractive(ctx context.Context, cfg *config.Config, prompt string, noTools bool) error {
 	dataDir := cfg.Options.DataDirectory
 	if dataDir == "" {
 		dataDir = ".techne"
@@ -152,6 +160,10 @@ func runNonInteractive(ctx context.Context, cfg *config.Config, prompt string) e
 	apiKey := providerCfg.APIKey
 	if apiKey == "" {
 		apiKey = os.Getenv("TECHNE_" + strings.ToUpper(cfg.DefaultProvider) + "_API_KEY")
+	}
+
+	if err := validateAPIKey(apiKey, providerCfg.Type, cfg.DefaultProvider); err != nil {
+		return err
 	}
 
 	var prov provider.Provider
@@ -192,7 +204,6 @@ func runNonInteractive(ctx context.Context, cfg *config.Config, prompt string) e
 		return err
 	}
 
-	// Subscribe to events for output
 	bus.Subscribe(func(e event.Event) {
 		switch e.Type {
 		case event.EventMessageDelta:
@@ -210,10 +221,13 @@ func runNonInteractive(ctx context.Context, cfg *config.Config, prompt string) e
 		}
 	})
 
+	toolsEnabled := !noTools && providerCfg.GetToolsEnabled()
+
 	if err := ag.Run(ctx, sess.ID, prompt, agent.Config{
 		Model:        cfg.DefaultModel,
 		MaxTokens:    4096,
 		SystemPrompt: "You are Techne Code, an expert AI coding assistant. Be concise.",
+		ToolsEnabled: toolsEnabled,
 	}); err != nil {
 		return err
 	}

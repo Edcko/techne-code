@@ -380,10 +380,8 @@ func TestConfigPriority(t *testing.T) {
 }
 
 func TestValidateDefaultProviderReference(t *testing.T) {
-	// When providers are defined and default_provider doesn't exist in providers
-	// but is a valid built-in type, it should be valid
 	cfg := &Config{
-		DefaultProvider: "anthropic", // Built-in type, not in Providers map
+		DefaultProvider: "anthropic",
 		DefaultModel:    "claude-sonnet-4-20250514",
 		Providers: map[string]ProviderConfig{
 			"ollama": {
@@ -401,4 +399,120 @@ func TestValidateDefaultProviderReference(t *testing.T) {
 	if err != nil {
 		t.Errorf("expected validation to pass for built-in provider type, got error: %v", err)
 	}
+}
+
+func TestGetToolsEnabled(t *testing.T) {
+	tests := []struct {
+		name     string
+		config   ProviderConfig
+		expected bool
+	}{
+		{
+			name: "ollama provider with nil ToolsEnabled defaults to false",
+			config: ProviderConfig{
+				Type:         "ollama",
+				ToolsEnabled: nil,
+			},
+			expected: false,
+		},
+		{
+			name: "openai provider with nil ToolsEnabled defaults to true",
+			config: ProviderConfig{
+				Type:         "openai",
+				ToolsEnabled: nil,
+			},
+			expected: true,
+		},
+		{
+			name: "anthropic provider with nil ToolsEnabled defaults to true",
+			config: ProviderConfig{
+				Type:         "anthropic",
+				ToolsEnabled: nil,
+			},
+			expected: true,
+		},
+		{
+			name: "gemini provider with nil ToolsEnabled defaults to true",
+			config: ProviderConfig{
+				Type:         "gemini",
+				ToolsEnabled: nil,
+			},
+			expected: true,
+		},
+		{
+			name: "ollama provider with explicit ToolsEnabled=true",
+			config: ProviderConfig{
+				Type:         "ollama",
+				ToolsEnabled: boolPtr(true),
+			},
+			expected: true,
+		},
+		{
+			name: "openai provider with explicit ToolsEnabled=false",
+			config: ProviderConfig{
+				Type:         "openai",
+				ToolsEnabled: boolPtr(false),
+			},
+			expected: false,
+		},
+		{
+			name: "unknown provider with nil ToolsEnabled defaults to true",
+			config: ProviderConfig{
+				Type:         "unknown-provider",
+				ToolsEnabled: nil,
+			},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.config.GetToolsEnabled()
+			if result != tt.expected {
+				t.Errorf("GetToolsEnabled() = %v, expected %v", result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGetToolsEnabled_EmptyType(t *testing.T) {
+	config := ProviderConfig{
+		Type:         "",
+		ToolsEnabled: nil,
+	}
+
+	result := config.GetToolsEnabled()
+	if !result {
+		t.Error("GetToolsEnabled() with empty Type should default to true (safe default)")
+	}
+}
+
+func TestGetToolsEnabled_PointerDistinction(t *testing.T) {
+	falseVal := false
+	nilConfig := ProviderConfig{
+		Type:         "ollama",
+		ToolsEnabled: nil,
+	}
+	explicitFalseConfig := ProviderConfig{
+		Type:         "ollama",
+		ToolsEnabled: &falseVal,
+	}
+
+	nilResult := nilConfig.GetToolsEnabled()
+	explicitFalseResult := explicitFalseConfig.GetToolsEnabled()
+
+	if nilResult != false {
+		t.Error("nil ToolsEnabled for ollama should return false (default)")
+	}
+
+	if explicitFalseResult != false {
+		t.Error("explicit false ToolsEnabled should return false")
+	}
+
+	if nilResult == explicitFalseResult {
+	}
+}
+
+func boolPtr(b bool) *bool {
+	return &b
 }

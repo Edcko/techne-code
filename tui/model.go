@@ -42,6 +42,7 @@ type Model struct {
 	bus           event.EventBus
 	unsub         func()
 	skillRegistry skill.SkillRegistry
+	toolsEnabled  bool
 
 	program   *tea.Program
 	programMu sync.RWMutex
@@ -69,6 +70,7 @@ func NewModel(
 	perm *permission.Service,
 	bus event.EventBus,
 	skillRegistry skill.SkillRegistry,
+	toolsEnabled bool,
 ) *Model {
 	ctx, cancel := context.WithCancel(context.Background())
 	ag := agent.New(agentClient, store, registry, perm, bus)
@@ -81,6 +83,7 @@ func NewModel(
 		bus:           bus,
 		skillRegistry: skillRegistry,
 		agent:         ag,
+		toolsEnabled:  toolsEnabled,
 		ctx:           ctx,
 		cancel:        cancel,
 		messages:      []ChatMessage{},
@@ -289,6 +292,7 @@ func (m *Model) handleSubmit() (tea.Model, tea.Cmd) {
 			Model:        m.cfg.DefaultModel,
 			MaxTokens:    4096,
 			SystemPrompt: systemPrompt,
+			ToolsEnabled: m.toolsEnabled,
 		})
 	}()
 

@@ -327,3 +327,92 @@ func TestSessionShowCommand(t *testing.T) {
 		t.Errorf("Expected 'session not found' error, got: %s (err: %v)", output, err)
 	}
 }
+
+func TestValidateAPIKey(t *testing.T) {
+	tests := []struct {
+		name         string
+		apiKey       string
+		providerType string
+		providerName string
+		wantErr      bool
+	}{
+		{
+			name:         "empty API key with ollama provider should not error",
+			apiKey:       "",
+			providerType: "ollama",
+			providerName: "ollama",
+			wantErr:      false,
+		},
+		{
+			name:         "empty API key with openai provider should error",
+			apiKey:       "",
+			providerType: "openai",
+			providerName: "openai",
+			wantErr:      true,
+		},
+		{
+			name:         "empty API key with anthropic provider should error",
+			apiKey:       "",
+			providerType: "anthropic",
+			providerName: "anthropic",
+			wantErr:      true,
+		},
+		{
+			name:         "empty API key with gemini provider should error",
+			apiKey:       "",
+			providerType: "gemini",
+			providerName: "gemini",
+			wantErr:      true,
+		},
+		{
+			name:         "empty API key with unknown provider should error",
+			apiKey:       "",
+			providerType: "unknown",
+			providerName: "unknown",
+			wantErr:      true,
+		},
+		{
+			name:         "non-empty API key with ollama provider should not error",
+			apiKey:       "test-key",
+			providerType: "ollama",
+			providerName: "ollama",
+			wantErr:      false,
+		},
+		{
+			name:         "non-empty API key with openai provider should not error",
+			apiKey:       "test-key",
+			providerType: "openai",
+			providerName: "openai",
+			wantErr:      false,
+		},
+		{
+			name:         "non-empty API key with anthropic provider should not error",
+			apiKey:       "test-key",
+			providerType: "anthropic",
+			providerName: "anthropic",
+			wantErr:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateAPIKey(tt.apiKey, tt.providerType, tt.providerName)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validateAPIKey() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if err != nil && tt.wantErr {
+				expectedEnvVar := "TECHNE_" + strings.ToUpper(tt.providerName) + "_API_KEY"
+				if !strings.Contains(err.Error(), "API key not found") {
+					t.Errorf("error message should contain 'API key not found', got: %v", err)
+				}
+				if !strings.Contains(err.Error(), expectedEnvVar) {
+					t.Errorf("error message should contain env var %s, got: %v", expectedEnvVar, err)
+				}
+				if !strings.Contains(err.Error(), tt.providerName) {
+					t.Errorf("error message should contain provider name %s, got: %v", tt.providerName, err)
+				}
+			}
+		})
+	}
+}

@@ -122,6 +122,11 @@ func runInteractive(ctx context.Context, cfg *config.Config, noTools bool, sessi
 	registry.Register(tools.NewWebFetchTool())
 	registry.Register(tools.NewGitTool())
 
+	registry.Register(tools.NewSubAgentTool(tools.NewResearcherConfig(cfg.DefaultModel), prov, store, registry))
+	registry.Register(tools.NewSubAgentTool(tools.NewCoderConfig(cfg.DefaultModel), prov, store, registry))
+	registry.Register(tools.NewSubAgentTool(tools.NewReviewerConfig(cfg.DefaultModel), prov, store, registry))
+	registry.Register(tools.NewSubAgentTool(tools.NewTesterConfig(cfg.DefaultModel), prov, store, registry))
+
 	skillRegistry := skills.NewRegistry()
 	_ = builtin.RegisterAll(skillRegistry)
 
@@ -196,6 +201,11 @@ func runNonInteractive(ctx context.Context, cfg *config.Config, prompt string, n
 	registry.Register(&tools.GlobTool{})
 	registry.Register(tools.NewWebFetchTool())
 	registry.Register(tools.NewGitTool())
+
+	registry.Register(tools.NewSubAgentTool(tools.NewResearcherConfig(cfg.DefaultModel), prov, store, registry))
+	registry.Register(tools.NewSubAgentTool(tools.NewCoderConfig(cfg.DefaultModel), prov, store, registry))
+	registry.Register(tools.NewSubAgentTool(tools.NewReviewerConfig(cfg.DefaultModel), prov, store, registry))
+	registry.Register(tools.NewSubAgentTool(tools.NewTesterConfig(cfg.DefaultModel), prov, store, registry))
 
 	skillRegistry := skills.NewRegistry()
 	_ = builtin.RegisterAll(skillRegistry)

@@ -10,12 +10,49 @@ import (
 	"github.com/Edcko/techne-code/internal/event"
 	"github.com/Edcko/techne-code/internal/llm"
 	"github.com/Edcko/techne-code/internal/permission"
-	"github.com/Edcko/techne-code/internal/tools"
 	pkgevent "github.com/Edcko/techne-code/pkg/event"
 	"github.com/Edcko/techne-code/pkg/provider"
 	"github.com/Edcko/techne-code/pkg/session"
 	"github.com/Edcko/techne-code/pkg/tool"
 )
+
+type testRegistry struct {
+	tools map[string]tool.Tool
+}
+
+func newTestRegistry() *testRegistry {
+	return &testRegistry{tools: make(map[string]tool.Tool)}
+}
+
+func (r *testRegistry) Register(t tool.Tool) error {
+	r.tools[t.Name()] = t
+	return nil
+}
+
+func (r *testRegistry) Get(name string) (tool.Tool, bool) {
+	t, ok := r.tools[name]
+	return t, ok
+}
+
+func (r *testRegistry) List() []tool.Tool {
+	result := make([]tool.Tool, 0, len(r.tools))
+	for _, t := range r.tools {
+		result = append(result, t)
+	}
+	return result
+}
+
+func (r *testRegistry) Schemas() []provider.ToolDef {
+	result := make([]provider.ToolDef, 0, len(r.tools))
+	for _, t := range r.tools {
+		result = append(result, provider.ToolDef{
+			Name:        t.Name(),
+			Description: t.Description(),
+			Parameters:  t.Parameters(),
+		})
+	}
+	return result
+}
 
 type MockProvider struct {
 	LastRequest *provider.ChatRequest
@@ -361,7 +398,7 @@ func TestAgentPermission_PermitsWhenGranted(t *testing.T) {
 	sessionID := "perm-test-1"
 	mockStore.CreateSession(&session.Session{ID: sessionID, CreatedAt: time.Now(), UpdatedAt: time.Now()})
 
-	registry := tools.NewRegistry()
+	registry := newTestRegistry()
 	dangerousTool := &PermissionTool{name: "bash", description: "Execute shell commands", needsPerm: true}
 	safeTool := &PermissionTool{name: "read_file", description: "Read file contents", needsPerm: false}
 	registry.Register(dangerousTool)
@@ -412,7 +449,7 @@ func TestAgentPermission_DeniedSkipsTool(t *testing.T) {
 	sessionID := "perm-deny-1"
 	mockStore.CreateSession(&session.Session{ID: sessionID, CreatedAt: time.Now(), UpdatedAt: time.Now()})
 
-	registry := tools.NewRegistry()
+	registry := newTestRegistry()
 	dangerousTool := &PermissionTool{name: "bash", description: "Execute shell commands", needsPerm: true}
 	registry.Register(dangerousTool)
 
@@ -452,7 +489,7 @@ func TestAgentPermission_AutoAllowSkipsDialog(t *testing.T) {
 	sessionID := "auto-allow-1"
 	mockStore.CreateSession(&session.Session{ID: sessionID, CreatedAt: time.Now(), UpdatedAt: time.Now()})
 
-	registry := tools.NewRegistry()
+	registry := newTestRegistry()
 	dangerousTool := &PermissionTool{name: "bash", description: "Execute shell commands", needsPerm: true}
 	registry.Register(dangerousTool)
 
@@ -492,7 +529,7 @@ func TestAgentPermission_SafeToolSkipsDialog(t *testing.T) {
 	sessionID := "safe-tool-1"
 	mockStore.CreateSession(&session.Session{ID: sessionID, CreatedAt: time.Now(), UpdatedAt: time.Now()})
 
-	registry := tools.NewRegistry()
+	registry := newTestRegistry()
 	safeTool := &PermissionTool{name: "read_file", description: "Read file contents", needsPerm: false}
 	registry.Register(safeTool)
 
@@ -555,7 +592,7 @@ func TestAgentToolInjection(t *testing.T) {
 			bus := event.NewChannelEventBus()
 			defer bus.Close()
 
-			registry := tools.NewRegistry()
+			registry := newTestRegistry()
 			if tc.registerTools {
 				tool1 := &MockTool{
 					name:        "read_file",

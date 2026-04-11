@@ -416,3 +416,69 @@ func TestValidateAPIKey(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionAndNewSessionMutuallyExclusive(t *testing.T) {
+	ctx := context.Background()
+	chatCmd := newChatCmd(ctx)
+
+	buf := new(bytes.Buffer)
+	chatCmd.SetOut(buf)
+	chatCmd.SetErr(buf)
+	chatCmd.SetContext(context.WithValue(ctx, configKey{}, config.DefaultConfig()))
+
+	chatCmd.SetArgs([]string{"--session", "abc-123", "--new-session"})
+
+	err := chatCmd.Execute()
+	if err == nil {
+		t.Error("expected error when both --session and --new-session are provided")
+	}
+	if !strings.Contains(err.Error(), "cannot use both") {
+		t.Errorf("expected mutual exclusion error, got: %v", err)
+	}
+}
+
+func TestSessionFlagInvalidID(t *testing.T) {
+	ctx := context.Background()
+	chatCmd := newChatCmd(ctx)
+
+	buf := new(bytes.Buffer)
+	chatCmd.SetOut(buf)
+	chatCmd.SetErr(buf)
+	chatCmd.SetContext(context.WithValue(ctx, configKey{}, config.DefaultConfig()))
+
+	chatCmd.SetArgs([]string{"--session", "nonexistent-session", "--prompt", "hello"})
+
+	err := chatCmd.Execute()
+	if err == nil {
+		t.Error("expected error when resuming nonexistent session")
+	}
+	if !strings.Contains(err.Error(), "session") && !strings.Contains(err.Error(), "provider") {
+		t.Errorf("expected session or provider error, got: %v", err)
+	}
+}
+
+func TestNewSessionFlagDefault(t *testing.T) {
+	ctx := context.Background()
+	chatCmd := newChatCmd(ctx)
+
+	newSessionFlag := chatCmd.Flags().Lookup("new-session")
+	if newSessionFlag == nil {
+		t.Fatal("expected --new-session flag to exist")
+	}
+	if newSessionFlag.DefValue != "false" {
+		t.Errorf("expected --new-session default to be false, got %q", newSessionFlag.DefValue)
+	}
+}
+
+func TestSessionFlagDefault(t *testing.T) {
+	ctx := context.Background()
+	chatCmd := newChatCmd(ctx)
+
+	sessionFlag := chatCmd.Flags().Lookup("session")
+	if sessionFlag == nil {
+		t.Fatal("expected --session flag to exist")
+	}
+	if sessionFlag.DefValue != "" {
+		t.Errorf("expected --session default to be empty, got %q", sessionFlag.DefValue)
+	}
+}

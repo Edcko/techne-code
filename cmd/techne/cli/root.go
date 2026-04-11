@@ -49,6 +49,8 @@ func Execute(ctx context.Context, version string) error {
 	rootCmd.AddCommand(newSessionCmd(ctx))
 	rootCmd.AddCommand(newSkillsCmd(ctx))
 	rootCmd.AddCommand(newVersionCmd(version))
+	rootCmd.AddCommand(newConfigCmd())
+	rootCmd.AddCommand(newDoctorCmd())
 
 	return rootCmd.ExecuteContext(ctx)
 }

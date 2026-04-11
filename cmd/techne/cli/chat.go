@@ -37,12 +37,18 @@ func newChatCmd(ctx context.Context) *cobra.Command {
 
 			prompt, _ := cmd.Flags().GetString("prompt")
 			noTools, _ := cmd.Flags().GetBool("no-tools")
+			sessionID, _ := cmd.Flags().GetString("session")
+			newSession, _ := cmd.Flags().GetBool("new-session")
 
-			if prompt != "" {
-				return runNonInteractive(ctx, cfg, prompt, noTools)
+			if sessionID != "" && newSession {
+				return fmt.Errorf("cannot use both --session and --new-session flags")
 			}
 
-			return runInteractive(ctx, cfg, noTools)
+			if prompt != "" {
+				return runNonInteractive(ctx, cfg, prompt, noTools, sessionID)
+			}
+
+			return runInteractive(ctx, cfg, noTools, sessionID)
 		},
 	}
 
@@ -62,7 +68,7 @@ func validateAPIKey(apiKey string, providerType string, providerName string) err
 	return nil
 }
 
-func runInteractive(ctx context.Context, cfg *config.Config, noTools bool) error {
+func runInteractive(ctx context.Context, cfg *config.Config, noTools bool, sessionID string) error {
 	dataDir := cfg.Options.DataDirectory
 	if dataDir == "" {
 		dataDir = ".techne"
@@ -113,6 +119,8 @@ func runInteractive(ctx context.Context, cfg *config.Config, noTools bool) error
 	registry.Register(tools.NewBashTool())
 	registry.Register(&tools.GrepTool{})
 	registry.Register(&tools.GlobTool{})
+	registry.Register(tools.NewWebFetchTool())
+	registry.Register(tools.NewGitTool())
 
 	skillRegistry := skills.NewRegistry()
 	_ = builtin.RegisterAll(skillRegistry)
@@ -124,7 +132,7 @@ func runInteractive(ctx context.Context, cfg *config.Config, noTools bool) error
 
 	toolsEnabled := !noTools && providerCfg.GetToolsEnabled()
 
-	model := tui.NewModel(cfg, client, store, registry, perm, bus, skillRegistry, toolsEnabled)
+	model := tui.NewModel(cfg, client, store, registry, perm, bus, skillRegistry, toolsEnabled, sessionID)
 	program := tea.NewProgram(model)
 	model.SetProgram(program)
 
@@ -136,7 +144,7 @@ func runInteractive(ctx context.Context, cfg *config.Config, noTools bool) error
 	return nil
 }
 
-func runNonInteractive(ctx context.Context, cfg *config.Config, prompt string, noTools bool) error {
+func runNonInteractive(ctx context.Context, cfg *config.Config, prompt string, noTools bool, sessionID string) error {
 	dataDir := cfg.Options.DataDirectory
 	if dataDir == "" {
 		dataDir = ".techne"
@@ -186,6 +194,8 @@ func runNonInteractive(ctx context.Context, cfg *config.Config, prompt string, n
 	registry.Register(tools.NewBashTool())
 	registry.Register(&tools.GrepTool{})
 	registry.Register(&tools.GlobTool{})
+	registry.Register(tools.NewWebFetchTool())
+	registry.Register(tools.NewGitTool())
 
 	skillRegistry := skills.NewRegistry()
 	_ = builtin.RegisterAll(skillRegistry)
@@ -195,13 +205,25 @@ func runNonInteractive(ctx context.Context, cfg *config.Config, prompt string, n
 	ag := agent.New(client, store, registry, perm, bus)
 	ag.WithSkills(skillRegistry)
 
-	sess := &session.Session{
-		Title:    "Non-interactive",
-		Model:    cfg.DefaultModel,
-		Provider: cfg.DefaultProvider,
-	}
-	if err := store.CreateSession(sess); err != nil {
-		return err
+	var sess *session.Session
+	if sessionID != "" {
+		existing, err := store.GetSession(sessionID)
+		if err != nil {
+			return fmt.Errorf("failed to load session %s: %w", sessionID, err)
+		}
+		if existing == nil {
+			return fmt.Errorf("session %s not found", sessionID)
+		}
+		sess = existing
+	} else {
+		sess = &session.Session{
+			Title:    "Non-interactive",
+			Model:    cfg.DefaultModel,
+			Provider: cfg.DefaultProvider,
+		}
+		if err := store.CreateSession(sess); err != nil {
+			return err
+		}
 	}
 
 	bus.Subscribe(func(e event.Event) {

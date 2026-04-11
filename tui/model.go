@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"github.com/Edcko/techne-code/internal/llm"
 	"github.com/Edcko/techne-code/internal/permission"
 	"github.com/Edcko/techne-code/pkg/event"
+	"github.com/Edcko/techne-code/pkg/provider"
 	"github.com/Edcko/techne-code/pkg/session"
 	"github.com/Edcko/techne-code/pkg/skill"
 	"github.com/Edcko/techne-code/pkg/tool"
@@ -71,6 +73,7 @@ func NewModel(
 	bus event.EventBus,
 	skillRegistry skill.SkillRegistry,
 	toolsEnabled bool,
+	sessionID string,
 ) *Model {
 	ctx, cancel := context.WithCancel(context.Background())
 	ag := agent.New(agentClient, store, registry, perm, bus)
@@ -88,6 +91,7 @@ func NewModel(
 		cancel:        cancel,
 		messages:      []ChatMessage{},
 		input:         "",
+		sessionID:     sessionID,
 	}
 }
 
@@ -136,17 +140,52 @@ func (m *Model) Init() tea.Cmd {
 		}
 	})
 
-	sess := &session.Session{
-		Title:    "New Session",
-		Model:    m.cfg.DefaultModel,
-		Provider: m.cfg.DefaultProvider,
+	if m.sessionID != "" {
+		sess, err := m.store.GetSession(m.sessionID)
+		if err != nil {
+			m.err = fmt.Errorf("failed to load session %s: %w", m.sessionID, err)
+			m.state = StateExiting
+			return nil
+		}
+		if sess == nil {
+			m.err = fmt.Errorf("session %s not found", m.sessionID)
+			m.state = StateExiting
+			return nil
+		}
+		stored, err := m.store.GetMessages(m.sessionID)
+		if err != nil {
+			m.err = fmt.Errorf("failed to load messages for session %s: %w", m.sessionID, err)
+			m.state = StateExiting
+			return nil
+		}
+		for _, msg := range stored {
+			var blocks []provider.ContentBlock
+			if err := json.Unmarshal(msg.Content, &blocks); err == nil {
+				for _, block := range blocks {
+					if block.Type == provider.BlockText && block.Text != "" {
+						m.messages = append(m.messages, ChatMessage{
+							Role:    msg.Role,
+							Content: block.Text,
+						})
+					}
+				}
+			}
+		}
+		m.cfg.DefaultModel = sess.Model
+		m.cfg.DefaultProvider = sess.Provider
+	} else {
+		sess := &session.Session{
+			Title:    "New Session",
+			Model:    m.cfg.DefaultModel,
+			Provider: m.cfg.DefaultProvider,
+		}
+		if err := m.store.CreateSession(sess); err != nil {
+			m.err = err
+			m.state = StateExiting
+			return nil
+		}
+		m.sessionID = sess.ID
 	}
-	if err := m.store.CreateSession(sess); err != nil {
-		m.err = err
-		m.state = StateExiting
-		return nil
-	}
-	m.sessionID = sess.ID
 
 	m.state = StateChatting
 	m.statusText = fmt.Sprintf("%s/%s", m.cfg.DefaultProvider, m.cfg.DefaultModel)

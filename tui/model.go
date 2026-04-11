@@ -18,6 +18,7 @@ import (
 	"github.com/Edcko/techne-code/pkg/session"
 	"github.com/Edcko/techne-code/pkg/skill"
 	"github.com/Edcko/techne-code/pkg/tool"
+	"github.com/Edcko/techne-code/tui/components"
 )
 
 type State int
@@ -45,6 +46,7 @@ type Model struct {
 	unsub         func()
 	skillRegistry skill.SkillRegistry
 	toolsEnabled  bool
+	permDialog    *components.PermissionDialog
 
 	program   *tea.Program
 	programMu sync.RWMutex
@@ -92,6 +94,7 @@ func NewModel(
 		messages:      []ChatMessage{},
 		input:         "",
 		sessionID:     sessionID,
+		permDialog:    components.NewPermissionDialog(),
 	}
 }
 
@@ -137,6 +140,11 @@ func (m *Model) Init() tea.Cmd {
 			}
 		case event.EventDone:
 			p.Send(doneMsg{})
+
+		case event.EventPermissionReq:
+			if data, ok := e.Data.(event.PermissionRequestData); ok {
+				p.Send(permissionRequestMsg{data: data})
+			}
 		}
 	})
 
@@ -255,6 +263,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.state = StateChatting
 		m.currentStreaming = nil
 		return m, nil
+
+	case permissionRequestMsg:
+		m.permDialog.Show(msg.data)
+		return m, nil
 	}
 
 	return m, nil
@@ -268,6 +280,13 @@ func truncate(s string, maxLen int) string {
 }
 
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.permDialog.Visible() {
+		handled := m.permDialog.HandleKey(msg)
+		if handled {
+			return m, nil
+		}
+	}
+
 	switch msg.String() {
 	case "ctrl+c":
 		if m.state == StateStreaming {
@@ -396,7 +415,15 @@ func (m *Model) View() tea.View {
 	if m.state == StateStreaming {
 		help = "ctrl+c: cancel"
 	}
+	if m.permDialog.Visible() {
+		help = "y: allow | a: always | n: deny | tab: cycle"
+	}
 	b.WriteString(StatusBarStyle.Render(fmt.Sprintf(" %s | %s ", m.statusText, help)))
+
+	if m.permDialog.Visible() {
+		b.WriteString("\n")
+		b.WriteString(m.permDialog.View(m.width))
+	}
 
 	return tea.NewView(b.String())
 }
@@ -414,6 +441,10 @@ type errorMsg struct {
 	fatal   bool
 }
 type doneMsg struct{}
+
+type permissionRequestMsg struct {
+	data event.PermissionRequestData
+}
 
 func buildSystemPrompt() string {
 	return `You are Techne Code, an expert AI coding assistant. You help developers write, review, debug, and understand code.

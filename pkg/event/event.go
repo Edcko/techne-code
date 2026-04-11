@@ -29,6 +29,10 @@ const (
 	EventSessionUpdate EventType = "session_update"
 	// EventPermissionReq is emitted when user permission is required for an action.
 	EventPermissionReq EventType = "permission_request"
+	// EventPermissionRes is emitted when the user responds to a permission request.
+	EventPermissionRes EventType = "permission_response"
+	// EventTokenUsage is emitted when token usage stats are updated.
+	EventTokenUsage EventType = "token_usage"
 )
 
 // Event represents an occurrence in the system.
@@ -99,6 +103,32 @@ type PermissionRequestData struct {
 	Description string
 	// Params contains the parameters for the action as raw JSON.
 	Params json.RawMessage
+	// Response is the channel where the user's response is sent back.
+	Response chan<- PermissionResponseData
+}
+
+// PermissionResponseData contains the user's response to a permission request.
+type PermissionResponseData struct {
+	// Allowed indicates whether the user granted permission.
+	Allowed bool
+	// Remember indicates whether to remember this permission for the session.
+	Remember bool
+}
+
+// TokenUsageData contains cumulative token usage statistics for a session.
+type TokenUsageData struct {
+	// InputTokens is the cumulative input tokens used.
+	InputTokens int `json:"input_tokens"`
+	// OutputTokens is the cumulative output tokens used.
+	OutputTokens int `json:"output_tokens"`
+	// TotalTokens is the sum of input and output tokens.
+	TotalTokens int `json:"total_tokens"`
+	// CachedTokens is the cumulative tokens read from cache.
+	CachedTokens int `json:"cached_tokens,omitempty"`
+	// EstimatedContextUsage is the estimated current context window usage in tokens.
+	EstimatedContextUsage int `json:"estimated_context_usage,omitempty"`
+	// ContextWindow is the model's maximum context window size.
+	ContextWindow int `json:"context_window,omitempty"`
 }
 
 // EventHandler is a callback function for handling events.

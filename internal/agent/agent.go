@@ -17,12 +17,13 @@ import (
 
 // Agent is the core AI coding agent that runs the conversation loop.
 type Agent struct {
-	client        *llm.Client
-	store         session.SessionStore
-	registry      tool.ToolRegistry
-	permission    *permission.Service
-	bus           event.EventBus
-	skillRegistry skill.SkillRegistry
+	client         *llm.Client
+	store          session.SessionStore
+	registry       tool.ToolRegistry
+	permission     *permission.Service
+	bus            event.EventBus
+	skillRegistry  skill.SkillRegistry
+	contextManager *ContextManager
 }
 
 // Config holds agent configuration.
@@ -42,13 +43,15 @@ func New(
 	perm *permission.Service,
 	bus event.EventBus,
 ) *Agent {
-	return &Agent{
-		client:     client,
-		store:      store,
-		registry:   registry,
-		permission: perm,
-		bus:        bus,
+	ag := &Agent{
+		client:         client,
+		store:          store,
+		registry:       registry,
+		permission:     perm,
+		bus:            bus,
+		contextManager: NewContextManager(store, bus, client),
 	}
+	return ag
 }
 
 func (a *Agent) WithSkills(registry skill.SkillRegistry) {
@@ -95,6 +98,11 @@ func (a *Agent) Run(ctx context.Context, sessionID string, userPrompt string, co
 			}
 		}
 
+		messages, err = a.contextManager.CheckAndCompress(ctx, sessionID, config.Model, messages, systemPrompt)
+		if err != nil {
+			return fmt.Errorf("context compression: %w", err)
+		}
+
 		req := provider.ChatRequest{
 			Messages: messages,
 			System:   systemPrompt,
@@ -117,6 +125,10 @@ func (a *Agent) Run(ctx context.Context, sessionID string, userPrompt string, co
 			}))
 			return fmt.Errorf("LLM stream: %w", err)
 		}
+
+		a.contextManager.TrackUsage(sessionID, resp.Usage)
+
+		a.publishTokenUsage(sessionID, config.Model, messages, systemPrompt)
 
 		// Save assistant message
 		assistantMsg := &session.StoredMessage{
@@ -158,13 +170,45 @@ func (a *Agent) Run(ctx context.Context, sessionID string, userPrompt string, co
 
 			// Permission check
 			if a.permission != nil && !a.permission.IsAllowed(sessionID, tc.Name, "execute") {
-				// In a real implementation, this would show a permission dialog
-				// For now, check if tool requires permission and deny by default in interactive mode
 				t, exists := a.registry.Get(tc.Name)
 				if exists && t.RequiresPermission() {
-					// Auto-grant for now — TUI will handle the dialog in Phase 3
-					if a.permission != nil {
-						a.permission.Grant(sessionID, tc.Name, "execute")
+					respCh := make(chan event.PermissionResponseData, 1)
+					permReq := event.PermissionRequestData{
+						ToolName:    tc.Name,
+						Action:      "execute",
+						Description: t.Description(),
+						Params:      tc.Input,
+						Response:    respCh,
+					}
+
+					a.bus.Publish(event.NewEvent(event.EventPermissionReq, sessionID, permReq))
+
+					select {
+					case resp := <-respCh:
+						if resp.Allowed {
+							if resp.Remember {
+								a.permission.Grant(sessionID, tc.Name, "execute")
+							}
+						} else {
+							a.bus.Publish(event.NewEvent(event.EventToolResult, sessionID, event.ToolResultData{
+								ToolName: tc.Name,
+								Content:  "Permission denied by user",
+								IsError:  true,
+							}))
+
+							toolResults = append(toolResults, provider.ContentBlock{
+								Type: provider.BlockToolResult,
+								ToolResult: &provider.ToolResultBlock{
+									ToolCallID: tc.ID,
+									Name:       tc.Name,
+									Content:    "Permission denied by user",
+									IsError:    true,
+								},
+							})
+							continue
+						}
+					case <-ctx.Done():
+						return ctx.Err()
 					}
 				}
 			}
@@ -308,4 +352,19 @@ func toJSON(v interface{}) json.RawMessage {
 		return json.RawMessage("[]")
 	}
 	return json.RawMessage(data)
+}
+
+func (a *Agent) publishTokenUsage(sessionID string, model string, messages []provider.Message, systemPrompt string) {
+	usage := a.contextManager.GetTokenUsage(sessionID)
+	contextWindow := GetContextWindow(a.client.Provider().Models(), model)
+	estimatedContext := a.contextManager.EstimateCurrentUsage(messages, systemPrompt)
+
+	a.bus.Publish(event.NewEvent(event.EventTokenUsage, sessionID, event.TokenUsageData{
+		InputTokens:           usage.InputTokens,
+		OutputTokens:          usage.OutputTokens,
+		TotalTokens:           usage.TotalTokens,
+		CachedTokens:          usage.CachedTokens,
+		EstimatedContextUsage: estimatedContext,
+		ContextWindow:         contextWindow,
+	}))
 }

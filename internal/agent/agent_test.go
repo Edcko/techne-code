@@ -3,12 +3,15 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/Edcko/techne-code/internal/event"
 	"github.com/Edcko/techne-code/internal/llm"
+	"github.com/Edcko/techne-code/internal/permission"
 	"github.com/Edcko/techne-code/internal/tools"
+	pkgevent "github.com/Edcko/techne-code/pkg/event"
 	"github.com/Edcko/techne-code/pkg/provider"
 	"github.com/Edcko/techne-code/pkg/session"
 	"github.com/Edcko/techne-code/pkg/tool"
@@ -224,9 +227,10 @@ func (m *MockStore) HasReadFile(sessionID, path string) (bool, error) {
 }
 
 type MockTool struct {
-	name        string
-	description string
-	parameters  json.RawMessage
+	name         string
+	description  string
+	parameters   json.RawMessage
+	requiresPerm bool
 }
 
 func (m *MockTool) Name() string                { return m.name }
@@ -235,7 +239,283 @@ func (m *MockTool) Parameters() json.RawMessage { return m.parameters }
 func (m *MockTool) Execute(ctx context.Context, input json.RawMessage) (tool.ToolResult, error) {
 	return tool.ToolResult{Content: "mock result"}, nil
 }
-func (m *MockTool) RequiresPermission() bool { return false }
+func (m *MockTool) RequiresPermission() bool { return m.requiresPerm }
+
+type MockProviderWithToolCalls struct {
+	LastRequest *provider.ChatRequest
+	responses   []provider.ChatResponse
+	callIndex   int
+	mu          sync.Mutex
+}
+
+func (m *MockProviderWithToolCalls) Name() string { return "mock_tc" }
+
+func (m *MockProviderWithToolCalls) Chat(ctx context.Context, req provider.ChatRequest) (*provider.ChatResponse, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.LastRequest = &req
+	if m.callIndex < len(m.responses) {
+		resp := m.responses[m.callIndex]
+		m.callIndex++
+		return &resp, nil
+	}
+	return &provider.ChatResponse{
+		Content:    []provider.ContentBlock{{Type: provider.BlockText, Text: "done"}},
+		StopReason: "end_turn",
+	}, nil
+}
+
+func (m *MockProviderWithToolCalls) Stream(ctx context.Context, req provider.ChatRequest) (<-chan provider.StreamChunk, error) {
+	m.mu.Lock()
+	m.LastRequest = &req
+	m.mu.Unlock()
+
+	ch := make(chan provider.StreamChunk)
+	go func() {
+		defer close(ch)
+		ch <- provider.StreamChunk{Type: "text_delta", Text: "executing tool"}
+		ch <- provider.StreamChunk{Type: "done"}
+	}()
+	return ch, nil
+}
+
+func (m *MockProviderWithToolCalls) Models() []provider.ModelInfo {
+	return []provider.ModelInfo{{ID: "mock-model", MaxTokens: 4096, SupportsTools: true}}
+}
+
+type MockProviderWithPermToolCalls struct {
+	LastRequest *provider.ChatRequest
+	toolName    string
+	toolInput   string
+}
+
+func (m *MockProviderWithPermToolCalls) Name() string { return "mock_perm_tc" }
+
+func (m *MockProviderWithPermToolCalls) Chat(ctx context.Context, req provider.ChatRequest) (*provider.ChatResponse, error) {
+	m.LastRequest = &req
+	return &provider.ChatResponse{
+		Content:    []provider.ContentBlock{{Type: provider.BlockText, Text: "done"}},
+		StopReason: "end_turn",
+	}, nil
+}
+
+func (m *MockProviderWithPermToolCalls) Stream(ctx context.Context, req provider.ChatRequest) (<-chan provider.StreamChunk, error) {
+	m.LastRequest = &req
+	ch := make(chan provider.StreamChunk)
+	go func() {
+		defer close(ch)
+		ch <- provider.StreamChunk{
+			Type: "tool_call_delta",
+			ToolCall: &provider.ToolCallDelta{
+				ID:   "tc-1",
+				Name: m.toolName,
+			},
+		}
+		ch <- provider.StreamChunk{
+			Type: "tool_call_delta",
+			ToolCall: &provider.ToolCallDelta{
+				ID:        "tc-1",
+				InputJSON: m.toolInput,
+				Done:      true,
+			},
+		}
+		ch <- provider.StreamChunk{Type: "done"}
+	}()
+	return ch, nil
+}
+
+func (m *MockProviderWithPermToolCalls) Models() []provider.ModelInfo {
+	return []provider.ModelInfo{{ID: "mock-model", MaxTokens: 4096, SupportsTools: true}}
+}
+
+type PermissionTool struct {
+	name        string
+	description string
+	needsPerm   bool
+}
+
+func (p *PermissionTool) Name() string                { return p.name }
+func (p *PermissionTool) Description() string         { return p.description }
+func (p *PermissionTool) Parameters() json.RawMessage { return json.RawMessage(`{"type":"object"}`) }
+func (p *PermissionTool) Execute(ctx context.Context, input json.RawMessage) (tool.ToolResult, error) {
+	return tool.ToolResult{Content: "tool executed: " + p.name}, nil
+}
+func (p *PermissionTool) RequiresPermission() bool { return p.needsPerm }
+
+func TestAgentPermission_PermitsWhenGranted(t *testing.T) {
+	bus := event.NewChannelEventBus()
+	defer bus.Close()
+
+	var receivedRequest *pkgevent.PermissionRequestData
+	bus.Subscribe(func(e pkgevent.Event) {
+		if e.Type == pkgevent.EventPermissionReq {
+			data, ok := e.Data.(pkgevent.PermissionRequestData)
+			if ok {
+				receivedRequest = &data
+				data.Response <- pkgevent.PermissionResponseData{Allowed: true, Remember: true}
+			}
+		}
+	})
+
+	mockStore := NewMockStore()
+	sessionID := "perm-test-1"
+	mockStore.CreateSession(&session.Session{ID: sessionID, CreatedAt: time.Now(), UpdatedAt: time.Now()})
+
+	registry := tools.NewRegistry()
+	dangerousTool := &PermissionTool{name: "bash", description: "Execute shell commands", needsPerm: true}
+	safeTool := &PermissionTool{name: "read_file", description: "Read file contents", needsPerm: false}
+	registry.Register(dangerousTool)
+	registry.Register(safeTool)
+
+	perm := permission.NewService(permission.ModeInteractive, nil)
+	mockProvider := &MockProviderWithPermToolCalls{toolName: "bash", toolInput: `{"command":"ls"}`}
+	client := llm.NewClient(mockProvider, bus)
+	ag := New(client, mockStore, registry, perm, bus)
+
+	config := Config{
+		Model:         "mock-model",
+		MaxTokens:     100,
+		SystemPrompt:  "test",
+		MaxIterations: 2,
+		ToolsEnabled:  true,
+	}
+
+	ctx := context.Background()
+	_ = ag.Run(ctx, sessionID, "test", config)
+
+	if receivedRequest == nil {
+		t.Fatal("expected permission request event to be published")
+	}
+	if receivedRequest.ToolName != "bash" {
+		t.Errorf("expected tool name 'bash', got %q", receivedRequest.ToolName)
+	}
+
+	if !perm.IsAllowed(sessionID, "bash", "execute") {
+		t.Error("expected bash to be granted after 'always allow'")
+	}
+}
+
+func TestAgentPermission_DeniedSkipsTool(t *testing.T) {
+	bus := event.NewChannelEventBus()
+	defer bus.Close()
+
+	bus.Subscribe(func(e pkgevent.Event) {
+		if e.Type == pkgevent.EventPermissionReq {
+			data, ok := e.Data.(pkgevent.PermissionRequestData)
+			if ok {
+				data.Response <- pkgevent.PermissionResponseData{Allowed: false}
+			}
+		}
+	})
+
+	mockStore := NewMockStore()
+	sessionID := "perm-deny-1"
+	mockStore.CreateSession(&session.Session{ID: sessionID, CreatedAt: time.Now(), UpdatedAt: time.Now()})
+
+	registry := tools.NewRegistry()
+	dangerousTool := &PermissionTool{name: "bash", description: "Execute shell commands", needsPerm: true}
+	registry.Register(dangerousTool)
+
+	perm := permission.NewService(permission.ModeInteractive, nil)
+	mockProvider := &MockProviderWithPermToolCalls{toolName: "bash", toolInput: `{"command":"ls"}`}
+	client := llm.NewClient(mockProvider, bus)
+	ag := New(client, mockStore, registry, perm, bus)
+
+	config := Config{
+		Model:         "mock-model",
+		MaxTokens:     100,
+		SystemPrompt:  "test",
+		MaxIterations: 2,
+		ToolsEnabled:  true,
+	}
+
+	ctx := context.Background()
+	_ = ag.Run(ctx, sessionID, "test", config)
+
+	if perm.IsAllowed(sessionID, "bash", "execute") {
+		t.Error("expected bash to NOT be granted after denial")
+	}
+}
+
+func TestAgentPermission_AutoAllowSkipsDialog(t *testing.T) {
+	bus := event.NewChannelEventBus()
+	defer bus.Close()
+
+	var permissionRequested bool
+	bus.Subscribe(func(e pkgevent.Event) {
+		if e.Type == pkgevent.EventPermissionReq {
+			permissionRequested = true
+		}
+	})
+
+	mockStore := NewMockStore()
+	sessionID := "auto-allow-1"
+	mockStore.CreateSession(&session.Session{ID: sessionID, CreatedAt: time.Now(), UpdatedAt: time.Now()})
+
+	registry := tools.NewRegistry()
+	dangerousTool := &PermissionTool{name: "bash", description: "Execute shell commands", needsPerm: true}
+	registry.Register(dangerousTool)
+
+	perm := permission.NewService(permission.ModeAutoAllow, nil)
+	mockProvider := &MockProviderWithPermToolCalls{toolName: "bash", toolInput: `{"command":"ls"}`}
+	client := llm.NewClient(mockProvider, bus)
+	ag := New(client, mockStore, registry, perm, bus)
+
+	config := Config{
+		Model:         "mock-model",
+		MaxTokens:     100,
+		SystemPrompt:  "test",
+		MaxIterations: 2,
+		ToolsEnabled:  true,
+	}
+
+	ctx := context.Background()
+	_ = ag.Run(ctx, sessionID, "test", config)
+
+	if permissionRequested {
+		t.Error("expected no permission request in auto_allow mode")
+	}
+}
+
+func TestAgentPermission_SafeToolSkipsDialog(t *testing.T) {
+	bus := event.NewChannelEventBus()
+	defer bus.Close()
+
+	var permissionRequested bool
+	bus.Subscribe(func(e pkgevent.Event) {
+		if e.Type == pkgevent.EventPermissionReq {
+			permissionRequested = true
+		}
+	})
+
+	mockStore := NewMockStore()
+	sessionID := "safe-tool-1"
+	mockStore.CreateSession(&session.Session{ID: sessionID, CreatedAt: time.Now(), UpdatedAt: time.Now()})
+
+	registry := tools.NewRegistry()
+	safeTool := &PermissionTool{name: "read_file", description: "Read file contents", needsPerm: false}
+	registry.Register(safeTool)
+
+	perm := permission.NewService(permission.ModeInteractive, nil)
+	mockProvider := &MockProviderWithPermToolCalls{toolName: "read_file", toolInput: `{"path":"/tmp/test.go"}`}
+	client := llm.NewClient(mockProvider, bus)
+	ag := New(client, mockStore, registry, perm, bus)
+
+	config := Config{
+		Model:         "mock-model",
+		MaxTokens:     100,
+		SystemPrompt:  "test",
+		MaxIterations: 2,
+		ToolsEnabled:  true,
+	}
+
+	ctx := context.Background()
+	_ = ag.Run(ctx, sessionID, "test", config)
+
+	if permissionRequested {
+		t.Error("expected no permission request for safe tool")
+	}
+}
 
 func TestAgentToolInjection(t *testing.T) {
 	testCases := []struct {

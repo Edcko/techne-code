@@ -19,6 +19,7 @@ import (
 	"github.com/Edcko/techne-code/pkg/skill"
 	"github.com/Edcko/techne-code/pkg/tool"
 	"github.com/Edcko/techne-code/tui/components"
+	"github.com/Edcko/techne-code/tui/markdown"
 )
 
 type State int
@@ -54,7 +55,10 @@ type Model struct {
 	messages         []ChatMessage
 	currentStreaming *int
 	thinkingBuffer   string
-	input            string
+	inputBuf         *InputBuffer
+	inputHistory     []string
+	historyIndex     int
+	historyDraft     string
 	statusText       string
 	sessionID        string
 	err              error
@@ -92,7 +96,9 @@ func NewModel(
 		ctx:           ctx,
 		cancel:        cancel,
 		messages:      []ChatMessage{},
-		input:         "",
+		inputBuf:      newInputBuffer(),
+		inputHistory:  []string{},
+		historyIndex:  -1,
 		sessionID:     sessionID,
 		permDialog:    components.NewPermissionDialog(),
 	}
@@ -210,6 +216,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 
+	case tea.PasteMsg:
+		if m.state == StateChatting {
+			m.inputBuf.InsertPaste(msg.Content)
+		}
+		return m, nil
+
 	case thinkingDeltaMsg:
 		m.thinkingBuffer += msg.text
 		return m, nil
@@ -294,6 +306,12 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			m.state = StateChatting
 			return m, nil
 		}
+		if m.state == StateChatting && !m.inputBuf.IsEmpty() {
+			m.inputBuf.Clear()
+			m.historyIndex = -1
+			m.historyDraft = ""
+			return m, nil
+		}
 		m.state = StateExiting
 		if m.unsub != nil {
 			m.unsub()
@@ -301,33 +319,121 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.bus.Close()
 		return m, tea.Quit
 
-	case "enter":
-		if m.state == StateChatting && strings.TrimSpace(m.input) != "" {
+	case "ctrl+enter", "alt+enter", "ctrl+s":
+		if m.state == StateChatting && !m.inputBuf.IsEmpty() {
 			return m.handleSubmit()
 		}
 
+	case "enter":
+		if m.state == StateChatting {
+			m.inputBuf.InsertNewline()
+			m.historyIndex = -1
+		}
+
 	case "backspace":
-		if len(m.input) > 0 {
-			m.input = m.input[:len(m.input)-1]
+		if m.state == StateChatting {
+			m.inputBuf.Backspace()
+			m.historyIndex = -1
+		}
+
+	case "delete":
+		if m.state == StateChatting {
+			m.inputBuf.Delete()
+			m.historyIndex = -1
+		}
+
+	case "up":
+		if m.state == StateChatting {
+			if m.inputBuf.cursorLine == 0 && len(m.inputHistory) > 0 {
+				m.navigateHistoryUp()
+			} else {
+				m.inputBuf.MoveUp()
+			}
+		}
+
+	case "down":
+		if m.state == StateChatting {
+			if m.inputBuf.cursorLine == m.inputBuf.LineCount()-1 && m.historyIndex != -1 {
+				m.navigateHistoryDown()
+			} else {
+				m.inputBuf.MoveDown()
+			}
+		}
+
+	case "left":
+		if m.state == StateChatting {
+			m.inputBuf.MoveLeft()
+		}
+
+	case "right":
+		if m.state == StateChatting {
+			m.inputBuf.MoveRight()
+		}
+
+	case "home":
+		if m.state == StateChatting {
+			m.inputBuf.MoveHome()
+		}
+
+	case "end":
+		if m.state == StateChatting {
+			m.inputBuf.MoveEnd()
 		}
 
 	case "space":
 		if m.state == StateChatting {
-			m.input += " "
+			m.inputBuf.InsertChar(" ")
+			m.historyIndex = -1
+		}
+
+	case "ctrl+a":
+		if m.state == StateChatting {
+			m.inputBuf.cursorLine = 0
+			m.inputBuf.cursorCol = 0
 		}
 
 	default:
 		if m.state == StateChatting && msg.String() != "" && len(msg.String()) == 1 {
-			m.input += msg.String()
+			m.inputBuf.InsertChar(msg.String())
+			m.historyIndex = -1
 		}
 	}
 
 	return m, nil
 }
 
+func (m *Model) navigateHistoryUp() {
+	if len(m.inputHistory) == 0 {
+		return
+	}
+	if m.historyIndex == -1 {
+		m.historyDraft = m.inputBuf.Text()
+		m.historyIndex = len(m.inputHistory) - 1
+	} else if m.historyIndex > 0 {
+		m.historyIndex--
+	}
+	m.inputBuf.SetText(m.inputHistory[m.historyIndex])
+}
+
+func (m *Model) navigateHistoryDown() {
+	if m.historyIndex == -1 {
+		return
+	}
+	if m.historyIndex < len(m.inputHistory)-1 {
+		m.historyIndex++
+		m.inputBuf.SetText(m.inputHistory[m.historyIndex])
+	} else {
+		m.historyIndex = -1
+		m.inputBuf.SetText(m.historyDraft)
+	}
+}
+
 func (m *Model) handleSubmit() (tea.Model, tea.Cmd) {
-	prompt := m.input
-	m.input = ""
+	prompt := m.inputBuf.Text()
+	m.addToHistory(prompt)
+	m.inputBuf.Clear()
+	m.historyIndex = -1
+	m.historyDraft = ""
 	m.messages = append(m.messages, ChatMessage{
 		Role:    "user",
 		Content: prompt,
@@ -357,6 +463,30 @@ func (m *Model) handleSubmit() (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m *Model) addToHistory(text string) {
+	if text == "" {
+		return
+	}
+	if len(m.inputHistory) > 0 && m.inputHistory[len(m.inputHistory)-1] == text {
+		return
+	}
+	m.inputHistory = append(m.inputHistory, text)
+	if len(m.inputHistory) > 100 {
+		m.inputHistory = m.inputHistory[len(m.inputHistory)-100:]
+	}
+}
+
+func (m *Model) inputAreaReserved() int {
+	reserved := 4
+	if m.state == StateStreaming {
+		reserved++
+	}
+	if m.permDialog.Visible() {
+		reserved += 8
+	}
+	return reserved
+}
+
 func (m *Model) View() tea.View {
 	var b strings.Builder
 
@@ -379,10 +509,11 @@ func (m *Model) View() tea.View {
 			b.WriteString(UserMessageStyle.Render("You: " + msg.Content))
 		case "assistant":
 			if msg.Thinking != "" {
-				b.WriteString(DimStyle.Render("💭 " + msg.Thinking))
+				b.WriteString(markdown.RenderThinking(msg.Thinking))
 				b.WriteString("\n")
 			}
-			b.WriteString(AssistantMessageStyle.Render("Assistant: " + msg.Content))
+			rendered := markdown.Render(msg.Content)
+			b.WriteString(AssistantMessageStyle.Render("Assistant:\n" + rendered))
 		case "tool":
 			b.WriteString(ToolMessageStyle.Render(msg.Content))
 		case "error":
@@ -393,7 +524,7 @@ func (m *Model) View() tea.View {
 
 	if m.state == StateStreaming {
 		if m.thinkingBuffer != "" {
-			b.WriteString(DimStyle.Render("💭 " + m.thinkingBuffer))
+			b.WriteString(markdown.RenderThinking(m.thinkingBuffer))
 			b.WriteString("\n")
 		} else {
 			b.WriteString(DimStyle.Render("● Thinking..."))
@@ -403,15 +534,31 @@ func (m *Model) View() tea.View {
 
 	b.WriteString("\n")
 
-	prompt := "> "
 	if m.state == StateChatting {
-		b.WriteString(InputPromptStyle.Render(prompt + m.input + "█"))
-	} else {
-		b.WriteString(DimStyle.Render(prompt + "..."))
-	}
-	b.WriteString("\n")
+		inputHeight := m.height - m.inputAreaReserved()
+		if inputHeight < 3 {
+			inputHeight = 3
+		}
+		visibleLines := m.inputBuf.VisibleLines(inputHeight)
+		scrollOffset := m.inputBuf.ScrollOffset()
 
-	help := "ctrl+c: quit | enter: send"
+		for i, line := range visibleLines {
+			lineNum := scrollOffset + i
+			cursorLine, cursorCol := m.inputBuf.CursorPos()
+			if lineNum == cursorLine {
+				displayLine := line[:min(cursorCol, len(line))] + "█" + line[min(cursorCol, len(line)):]
+				b.WriteString(InputPromptStyle.Render("  " + displayLine))
+			} else {
+				b.WriteString(InputPromptStyle.Render("  " + line))
+			}
+			b.WriteString("\n")
+		}
+	} else {
+		b.WriteString(DimStyle.Render("> ..."))
+		b.WriteString("\n")
+	}
+
+	help := "enter: newline | ctrl+enter: send | ctrl+c: quit"
 	if m.state == StateStreaming {
 		help = "ctrl+c: cancel"
 	}

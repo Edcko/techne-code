@@ -37,6 +37,20 @@ changelog:
       - '^test:'
       - '^ci:'
 
+brews:
+  - name: techne
+    repository:
+      owner: Edcko
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/Edcko/techne-code"
+    description: "AI-powered coding agent with TUI interface"
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/techne version")
+    install: |
+      bin.install "techne"
+
 release:
   github:
     owner: Edcko

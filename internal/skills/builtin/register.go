@@ -9,6 +9,11 @@ func AllSkills() []skill.Skill {
 		NewGoEngineerSkill(),
 		NewSecuritySkill(),
 		NewTypeScriptSkill(),
+		NewPythonSkill(),
+		NewReactSkill(),
+		NewDockerSkill(),
+		NewDatabaseSkill(),
+		NewAPIDesignSkill(),
 	}
 }
 

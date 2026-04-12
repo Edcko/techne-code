@@ -15,6 +15,7 @@ import (
 	eventbus "github.com/Edcko/techne-code/internal/event"
 	"github.com/Edcko/techne-code/internal/llm"
 	"github.com/Edcko/techne-code/internal/llm/providers/anthropic"
+	"github.com/Edcko/techne-code/internal/llm/providers/gemini"
 	"github.com/Edcko/techne-code/internal/llm/providers/ollama"
 	"github.com/Edcko/techne-code/internal/llm/providers/openai"
 	"github.com/Edcko/techne-code/internal/permission"
@@ -104,6 +105,8 @@ func runInteractive(ctx context.Context, cfg *config.Config, noTools bool, sessi
 		prov = anthropic.New(apiKey)
 	case "openai":
 		prov = openai.NewAdapter(apiKey, providerCfg.BaseURL, nil)
+	case "gemini":
+		prov = gemini.NewAdapter(apiKey, providerCfg.BaseURL, nil)
 	case "ollama":
 		prov = ollama.New(providerCfg.BaseURL)
 	default:
@@ -185,6 +188,8 @@ func runNonInteractive(ctx context.Context, cfg *config.Config, prompt string, n
 		prov = anthropic.New(apiKey)
 	case "openai":
 		prov = openai.NewAdapter(apiKey, providerCfg.BaseURL, nil)
+	case "gemini":
+		prov = gemini.NewAdapter(apiKey, providerCfg.BaseURL, nil)
 	case "ollama":
 		prov = ollama.New(providerCfg.BaseURL)
 	default:

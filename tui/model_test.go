@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,6 +40,7 @@ func (m *mockProviderForTUI) Models() []provider.ModelInfo {
 }
 
 type mockStoreForTUI struct {
+	mu       sync.RWMutex
 	sessions map[string]*session.Session
 	messages map[string][]session.StoredMessage
 }
@@ -51,6 +53,8 @@ func newMockStoreForTUI() *mockStoreForTUI {
 }
 
 func (s *mockStoreForTUI) CreateSession(sess *session.Session) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if sess.ID == "" {
 		sess.ID = "generated-id"
 	}
@@ -61,10 +65,14 @@ func (s *mockStoreForTUI) CreateSession(sess *session.Session) error {
 }
 
 func (s *mockStoreForTUI) GetSession(id string) (*session.Session, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.sessions[id], nil
 }
 
 func (s *mockStoreForTUI) ListSessions() ([]session.Session, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	var result []session.Session
 	for _, sess := range s.sessions {
 		result = append(result, *sess)
@@ -73,6 +81,8 @@ func (s *mockStoreForTUI) ListSessions() ([]session.Session, error) {
 }
 
 func (s *mockStoreForTUI) UpdateSessionTitle(id, title string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if sess, ok := s.sessions[id]; ok {
 		sess.Title = title
 	}
@@ -80,6 +90,8 @@ func (s *mockStoreForTUI) UpdateSessionTitle(id, title string) error {
 }
 
 func (s *mockStoreForTUI) UpdateSessionSummary(id, summaryMessageID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if sess, ok := s.sessions[id]; ok {
 		sess.SummaryMessageID = &summaryMessageID
 	}
@@ -87,21 +99,29 @@ func (s *mockStoreForTUI) UpdateSessionSummary(id, summaryMessageID string) erro
 }
 
 func (s *mockStoreForTUI) DeleteSession(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	delete(s.sessions, id)
 	delete(s.messages, id)
 	return nil
 }
 
 func (s *mockStoreForTUI) SaveMessage(m *session.StoredMessage) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.messages[m.SessionID] = append(s.messages[m.SessionID], *m)
 	return nil
 }
 
 func (s *mockStoreForTUI) GetMessages(sessionID string) ([]session.StoredMessage, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.messages[sessionID], nil
 }
 
 func (s *mockStoreForTUI) GetMessagesAfter(sessionID string, after time.Time) ([]session.StoredMessage, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	var result []session.StoredMessage
 	for _, msg := range s.messages[sessionID] {
 		if msg.CreatedAt.After(after) {
@@ -112,6 +132,8 @@ func (s *mockStoreForTUI) GetMessagesAfter(sessionID string, after time.Time) ([
 }
 
 func (s *mockStoreForTUI) DeleteMessages(sessionID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.messages[sessionID] = nil
 	return nil
 }

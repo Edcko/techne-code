@@ -449,10 +449,45 @@ func (m *Model) navigateHistoryDown() {
 
 func (m *Model) handleSubmit() (tea.Model, tea.Cmd) {
 	prompt := m.inputBuf.Text()
-	m.addToHistory(prompt)
 	m.inputBuf.Clear()
 	m.historyIndex = -1
 	m.historyDraft = ""
+
+	result := ExecuteSlashCommand(prompt, m.cfg)
+	if result.Handled {
+		m.addToHistory(prompt)
+
+		if result.ClearChat {
+			m.messages = []ChatMessage{}
+			m.tokenUsage = nil
+			m.statusText = fmt.Sprintf("%s/%s", m.cfg.DefaultProvider, m.cfg.DefaultModel)
+		}
+
+		if result.NewModel != "" {
+			m.cfg.DefaultModel = result.NewModel
+			m.statusText = fmt.Sprintf("%s/%s", m.cfg.DefaultProvider, m.cfg.DefaultModel)
+		}
+
+		if result.NewProvider != "" {
+			m.cfg.DefaultProvider = result.NewProvider
+			if providerCfg, ok := m.cfg.Providers[result.NewProvider]; ok && len(providerCfg.Models) > 0 {
+				m.cfg.DefaultModel = providerCfg.Models[0]
+			}
+			m.statusText = fmt.Sprintf("%s/%s", m.cfg.DefaultProvider, m.cfg.DefaultModel)
+		}
+
+		role := "system"
+		if result.IsError {
+			role = "error"
+		}
+		m.messages = append(m.messages, ChatMessage{
+			Role:    role,
+			Content: result.Message,
+		})
+		return m, nil
+	}
+
+	m.addToHistory(prompt)
 	m.messages = append(m.messages, ChatMessage{
 		Role:    "user",
 		Content: prompt,
@@ -539,6 +574,8 @@ func (m *Model) View() tea.View {
 				b.WriteString("\n")
 				b.WriteString(msg.Diff)
 			}
+		case "system":
+			b.WriteString(HelpStyle.Render(msg.Content))
 		case "error":
 			b.WriteString(ErrorMessageStyle.Render("Error: " + msg.Content))
 		}

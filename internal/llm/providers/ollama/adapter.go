@@ -174,6 +174,7 @@ func (a *Adapter) Stream(ctx context.Context, req provider.ChatRequest) (<-chan 
 									Done:      true,
 								},
 							}
+							ch <- provider.StreamChunk{Type: "done"}
 						} else {
 							ch <- provider.StreamChunk{
 								Type: "text_delta",

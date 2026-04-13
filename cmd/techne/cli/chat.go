@@ -122,6 +122,7 @@ func runInteractive(ctx context.Context, cfg *config.Config, noTools bool, sessi
 	registry.Register(tools.NewBashTool())
 	registry.Register(&tools.GrepTool{})
 	registry.Register(&tools.GlobTool{})
+	registry.Register(&tools.ListDirTool{})
 	registry.Register(tools.NewWebFetchTool())
 	registry.Register(tools.NewGitTool())
 
@@ -204,6 +205,7 @@ func runNonInteractive(ctx context.Context, cfg *config.Config, prompt string, n
 	registry.Register(tools.NewBashTool())
 	registry.Register(&tools.GrepTool{})
 	registry.Register(&tools.GlobTool{})
+	registry.Register(&tools.ListDirTool{})
 	registry.Register(tools.NewWebFetchTool())
 	registry.Register(tools.NewGitTool())
 

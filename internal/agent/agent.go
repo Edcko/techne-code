@@ -222,11 +222,21 @@ func (a *Agent) Run(ctx context.Context, sessionID string, userPrompt string, co
 			// Execute tool
 			result := a.executeTool(ctx, tc)
 
-			// Publish tool result event
+			var diffData *event.DiffData
+			if result.Diff != nil {
+				diffData = &event.DiffData{
+					FilePath:   result.Diff.FilePath,
+					OldContent: result.Diff.OldContent,
+					NewContent: result.Diff.NewContent,
+					IsNewFile:  result.Diff.IsNewFile,
+				}
+			}
+
 			a.bus.Publish(event.NewEvent(event.EventToolResult, sessionID, event.ToolResultData{
 				ToolName: tc.Name,
 				Content:  result.Content,
 				IsError:  result.IsError,
+				Diff:     diffData,
 			}))
 
 			// Build tool result content block

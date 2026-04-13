@@ -75,6 +75,16 @@ type ToolResultData struct {
 	Content string `json:"content"`
 	// IsError indicates whether the tool execution failed.
 	IsError bool `json:"is_error"`
+	// Diff contains file diff information when available.
+	Diff *DiffData `json:"diff,omitempty"`
+}
+
+// DiffData carries file diff information through the event bus.
+type DiffData struct {
+	FilePath   string `json:"file_path"`
+	OldContent string `json:"old_content,omitempty"`
+	NewContent string `json:"new_content,omitempty"`
+	IsNewFile  bool   `json:"is_new_file"`
 }
 
 // ErrorData contains data for EventError events.

@@ -10,12 +10,20 @@ import (
 	"github.com/Edcko/techne-code/pkg/provider"
 )
 
+type DiffInfo struct {
+	FilePath   string `json:"file_path"`
+	OldContent string `json:"old_content,omitempty"`
+	NewContent string `json:"new_content,omitempty"`
+	IsNewFile  bool   `json:"is_new_file"`
+}
+
 // ToolResult represents the output of a tool execution.
 type ToolResult struct {
 	// Content contains the output from the tool.
 	Content string `json:"content"`
 	// IsError indicates whether the tool execution failed.
-	IsError bool `json:"is_error"`
+	IsError bool      `json:"is_error"`
+	Diff    *DiffInfo `json:"diff,omitempty"`
 }
 
 // Tool defines the interface for agent tools.

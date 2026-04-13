@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/Edcko/techne-code/internal/llm"
 	"github.com/Edcko/techne-code/internal/permission"
 	"github.com/Edcko/techne-code/internal/tools"
+	"github.com/Edcko/techne-code/pkg/event"
 	"github.com/Edcko/techne-code/pkg/provider"
 	"github.com/Edcko/techne-code/pkg/session"
 )
@@ -1055,4 +1057,182 @@ func TestHandleKey_MultilineTyping(t *testing.T) {
 	if m.messages[0].Content != expected {
 		t.Errorf("expected message %q, got %q", expected, m.messages[0].Content)
 	}
+}
+
+func TestStatusBar_RendersModelName(t *testing.T) {
+	m := initTestModel()
+	m.width = 80
+	m.height = 24
+
+	view := m.View()
+	rendered := view.Content
+
+	if !contains(rendered, m.cfg.DefaultProvider) {
+		t.Errorf("expected status bar to contain provider %q, got: %s", m.cfg.DefaultProvider, rendered)
+	}
+	if !contains(rendered, m.cfg.DefaultModel) {
+		t.Errorf("expected status bar to contain model %q, got: %s", m.cfg.DefaultModel, rendered)
+	}
+}
+
+func TestStatusBar_RendersSessionID(t *testing.T) {
+	m := initTestModel()
+	m.width = 80
+	m.height = 24
+
+	view := m.View()
+	rendered := view.Content
+
+	if m.sessionID == "" {
+		t.Fatal("expected session ID to be set after Init")
+	}
+
+	expectedShort := m.sessionID
+	if len(m.sessionID) >= 8 {
+		expectedShort = m.sessionID[:8]
+	}
+
+	if !contains(rendered, expectedShort) {
+		t.Errorf("expected status bar to contain session short ID %q, got: %s", expectedShort, rendered)
+	}
+}
+
+func TestStatusBar_UpdatesOnTokenEvent(t *testing.T) {
+	m := initTestModel()
+	m.width = 80
+	m.height = 24
+
+	view := m.View()
+	rendered := view.Content
+
+	if !contains(rendered, "tokens: --") {
+		t.Errorf("expected status bar to show 'tokens: --' before token event, got: %s", rendered)
+	}
+
+	m.Update(tokenUsageMsg{
+		data: event.TokenUsageData{
+			InputTokens:           100,
+			OutputTokens:          50,
+			TotalTokens:           150,
+			EstimatedContextUsage: 1000,
+			ContextWindow:         128000,
+		},
+	})
+
+	view = m.View()
+	rendered = view.Content
+
+	if !contains(rendered, "tokens: 150") {
+		t.Errorf("expected status bar to show 'tokens: 150' after token event, got: %s", rendered)
+	}
+}
+
+func TestStatusBar_ShowsContextUsage(t *testing.T) {
+	m := initTestModel()
+	m.width = 80
+	m.height = 24
+
+	m.Update(tokenUsageMsg{
+		data: event.TokenUsageData{
+			TotalTokens:           64000,
+			EstimatedContextUsage: 64000,
+			ContextWindow:         128000,
+		},
+	})
+
+	view := m.View()
+	rendered := view.Content
+
+	if !contains(rendered, "ctx: 50%") {
+		t.Errorf("expected status bar to show 'ctx: 50%%', got: %s", rendered)
+	}
+}
+
+func TestStatusBar_ShowsNoContextWhenZero(t *testing.T) {
+	m := initTestModel()
+	m.width = 80
+	m.height = 24
+
+	view := m.View()
+	rendered := view.Content
+
+	if !contains(rendered, "ctx: --") {
+		t.Errorf("expected status bar to show 'ctx: --' when no token data, got: %s", rendered)
+	}
+}
+
+func TestStatusBar_StreamingIndicator(t *testing.T) {
+	m := initTestModel()
+	m.width = 80
+	m.height = 24
+
+	view := m.View()
+	rendered := view.Content
+
+	if contains(rendered, "●") {
+		t.Errorf("expected no streaming indicator in chatting state, got: %s", rendered)
+	}
+
+	m.state = StateStreaming
+
+	view = m.View()
+	rendered = view.Content
+
+	if !contains(rendered, "●") {
+		t.Errorf("expected streaming indicator '●' in streaming state, got: %s", rendered)
+	}
+
+	if !contains(rendered, "ctrl+c:cancel") {
+		t.Errorf("expected 'ctrl+c:cancel' help text during streaming, got: %s", rendered)
+	}
+}
+
+func TestStatusBar_SessionIDShort(t *testing.T) {
+	store := newMockStoreForTUI()
+	sess := &session.Session{
+		ID:       "abcdefgh-1234-5678-abcd-1234567890ab",
+		Title:    "Long ID",
+		Model:    "test",
+		Provider: "test",
+	}
+	store.sessions[sess.ID] = sess
+
+	m := newTestModel(store, sess.ID)
+	m.Init()
+	m.width = 80
+	m.height = 24
+
+	view := m.View()
+	rendered := view.Content
+
+	if !contains(rendered, "abcdefgh") {
+		t.Errorf("expected status bar to show first 8 chars of session ID, got: %s", rendered)
+	}
+}
+
+func TestStatusBar_SessionIDShortWhenLessThan8(t *testing.T) {
+	store := newMockStoreForTUI()
+	sess := &session.Session{
+		ID:       "abc",
+		Title:    "Short ID",
+		Model:    "test",
+		Provider: "test",
+	}
+	store.sessions[sess.ID] = sess
+
+	m := newTestModel(store, sess.ID)
+	m.Init()
+	m.width = 80
+	m.height = 24
+
+	view := m.View()
+	rendered := view.Content
+
+	if !contains(rendered, "abc") {
+		t.Errorf("expected status bar to show full short session ID, got: %s", rendered)
+	}
+}
+
+func contains(s, substr string) bool {
+	return strings.Contains(s, substr)
 }

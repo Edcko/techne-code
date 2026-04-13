@@ -19,7 +19,10 @@ import (
 	"github.com/Edcko/techne-code/pkg/skill"
 	"github.com/Edcko/techne-code/pkg/tool"
 	"github.com/Edcko/techne-code/tui/components"
+	"github.com/Edcko/techne-code/tui/diff"
 	"github.com/Edcko/techne-code/tui/markdown"
+
+	"charm.land/lipgloss/v2"
 )
 
 type State int
@@ -35,6 +38,7 @@ type ChatMessage struct {
 	Role     string
 	Content  string
 	Thinking string
+	Diff     string
 }
 
 type Model struct {
@@ -61,6 +65,7 @@ type Model struct {
 	historyDraft     string
 	statusText       string
 	sessionID        string
+	tokenUsage       *event.TokenUsageData
 	err              error
 
 	width  int
@@ -138,7 +143,7 @@ func (m *Model) Init() tea.Cmd {
 			}
 		case event.EventToolResult:
 			if data, ok := e.Data.(event.ToolResultData); ok {
-				p.Send(toolResultMsg{name: data.ToolName, content: data.Content, isError: data.IsError})
+				p.Send(toolResultMsg{name: data.ToolName, content: data.Content, isError: data.IsError, diffData: data.Diff})
 			}
 		case event.EventError:
 			if data, ok := e.Data.(event.ErrorData); ok {
@@ -146,6 +151,11 @@ func (m *Model) Init() tea.Cmd {
 			}
 		case event.EventDone:
 			p.Send(doneMsg{})
+
+		case event.EventTokenUsage:
+			if data, ok := e.Data.(event.TokenUsageData); ok {
+				p.Send(tokenUsageMsg{data: data})
+			}
 
 		case event.EventPermissionReq:
 			if data, ok := e.Data.(event.PermissionRequestData); ok {
@@ -254,9 +264,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.isError {
 			prefix = "✗"
 		}
+		var diffContent string
+		if msg.diffData != nil && !msg.isError {
+			diffContent = diff.Render(msg.diffData.OldContent, msg.diffData.NewContent, msg.diffData.FilePath, msg.diffData.IsNewFile)
+		}
 		m.messages = append(m.messages, ChatMessage{
 			Role:    "tool",
 			Content: fmt.Sprintf("  %s %s: %s", prefix, msg.name, truncate(msg.content, 200)),
+			Diff:    diffContent,
 		})
 		return m, nil
 
@@ -274,6 +289,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case doneMsg:
 		m.state = StateChatting
 		m.currentStreaming = nil
+		return m, nil
+
+	case tokenUsageMsg:
+		m.tokenUsage = &msg.data
 		return m, nil
 
 	case permissionRequestMsg:
@@ -516,6 +535,10 @@ func (m *Model) View() tea.View {
 			b.WriteString(AssistantMessageStyle.Render("Assistant:\n" + rendered))
 		case "tool":
 			b.WriteString(ToolMessageStyle.Render(msg.Content))
+			if msg.Diff != "" {
+				b.WriteString("\n")
+				b.WriteString(msg.Diff)
+			}
 		case "error":
 			b.WriteString(ErrorMessageStyle.Render("Error: " + msg.Content))
 		}
@@ -558,36 +581,81 @@ func (m *Model) View() tea.View {
 		b.WriteString("\n")
 	}
 
-	help := "enter: newline | ctrl+enter: send | ctrl+c: quit"
-	if m.state == StateStreaming {
-		help = "ctrl+c: cancel"
-	}
-	if m.permDialog.Visible() {
-		help = "y: allow | a: always | n: deny | tab: cycle"
-	}
-	b.WriteString(StatusBarStyle.Render(fmt.Sprintf(" %s | %s ", m.statusText, help)))
-
 	if m.permDialog.Visible() {
 		b.WriteString("\n")
 		b.WriteString(m.permDialog.View(m.width))
 	}
 
+	b.WriteString("\n")
+	b.WriteString(m.renderStatusBar())
+
 	return tea.NewView(b.String())
+}
+
+func (m *Model) renderStatusBar() string {
+	modelName := fmt.Sprintf("%s/%s", m.cfg.DefaultProvider, m.cfg.DefaultModel)
+
+	sessionShort := "------"
+	if len(m.sessionID) >= 8 {
+		sessionShort = m.sessionID[:8]
+	} else if m.sessionID != "" {
+		sessionShort = m.sessionID
+	}
+
+	tokenInfo := "tokens: --"
+	if m.tokenUsage != nil {
+		tokenInfo = fmt.Sprintf("tokens: %d", m.tokenUsage.TotalTokens)
+	}
+
+	contextInfo := "ctx: --"
+	if m.tokenUsage != nil && m.tokenUsage.ContextWindow > 0 {
+		pct := float64(m.tokenUsage.EstimatedContextUsage) / float64(m.tokenUsage.ContextWindow) * 100
+		contextInfo = fmt.Sprintf("ctx: %.0f%%", pct)
+	}
+
+	separator := lipgloss.NewStyle().Foreground(lipgloss.Color("#3C3C3C")).Render(" │ ")
+
+	stateIndicator := ""
+	if m.state == StateStreaming {
+		stateIndicator = lipgloss.NewStyle().Foreground(lipgloss.Color("#04B575")).Render("● ")
+	}
+
+	helpText := "enter:newline ctrl+enter:send ctrl+c:quit"
+	if m.state == StateStreaming {
+		helpText = "ctrl+c:cancel"
+	}
+	if m.permDialog.Visible() {
+		helpText = "y:allow a:always n:deny tab:cycle"
+	}
+
+	statusPart := stateIndicator + modelName + separator + sessionShort + separator + tokenInfo + separator + contextInfo
+	helpPart := lipgloss.NewStyle().Foreground(lipgloss.Color("#5B6071")).Render(helpText)
+
+	separatorMid := lipgloss.NewStyle().Foreground(lipgloss.Color("#3C3C3C")).Render("  ")
+
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color("#888888")).
+		Render(statusPart + separatorMid + helpPart)
 }
 
 type messageDeltaMsg struct{ text string }
 type thinkingDeltaMsg struct{ text string }
 type toolStartMsg struct{ name string }
 type toolResultMsg struct {
-	name    string
-	content string
-	isError bool
+	name     string
+	content  string
+	isError  bool
+	diffData *event.DiffData
 }
 type errorMsg struct {
 	message string
 	fatal   bool
 }
 type doneMsg struct{}
+
+type tokenUsageMsg struct {
+	data event.TokenUsageData
+}
 
 type permissionRequestMsg struct {
 	data event.PermissionRequestData

@@ -58,5 +58,12 @@ func (t *EditFileTool) Execute(ctx context.Context, input json.RawMessage) (tool
 		return tool.ToolResult{Content: fmt.Sprintf("Error writing file: %v", err), IsError: true}, nil
 	}
 
-	return tool.ToolResult{Content: fmt.Sprintf("Replaced %d occurrence(s) in %s", count, params.Path)}, nil
+	return tool.ToolResult{
+		Content: fmt.Sprintf("Replaced %d occurrence(s) in %s", count, params.Path),
+		Diff: &tool.DiffInfo{
+			FilePath:   params.Path,
+			OldContent: content,
+			NewContent: newContent,
+		},
+	}, nil
 }

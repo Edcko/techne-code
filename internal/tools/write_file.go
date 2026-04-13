@@ -40,7 +40,15 @@ func (t *WriteFileTool) Execute(ctx context.Context, input json.RawMessage) (too
 		return tool.ToolResult{Content: fmt.Sprintf("Error parsing parameters: %v", err), IsError: true}, nil
 	}
 
-	// Create parent directories if needed
+	oldContent := ""
+	isNewFile := false
+	existingData, err := os.ReadFile(params.Path)
+	if err != nil {
+		isNewFile = true
+	} else {
+		oldContent = string(existingData)
+	}
+
 	dir := filepath.Dir(params.Path)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return tool.ToolResult{Content: fmt.Sprintf("Error creating directory: %v", err), IsError: true}, nil
@@ -50,5 +58,13 @@ func (t *WriteFileTool) Execute(ctx context.Context, input json.RawMessage) (too
 		return tool.ToolResult{Content: fmt.Sprintf("Error writing file: %v", err), IsError: true}, nil
 	}
 
-	return tool.ToolResult{Content: fmt.Sprintf("Successfully wrote %d bytes to %s", len(params.Content), params.Path)}, nil
+	return tool.ToolResult{
+		Content: fmt.Sprintf("Successfully wrote %d bytes to %s", len(params.Content), params.Path),
+		Diff: &tool.DiffInfo{
+			FilePath:   params.Path,
+			OldContent: oldContent,
+			NewContent: params.Content,
+			IsNewFile:  isNewFile,
+		},
+	}, nil
 }

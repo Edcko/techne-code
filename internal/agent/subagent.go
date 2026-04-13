@@ -26,10 +26,11 @@ type SubAgentConfig struct {
 }
 
 type SubAgent struct {
-	provider provider.Provider
-	store    session.SessionStore
-	config   SubAgentConfig
-	toolMap  map[string]tool.Tool
+	provider  provider.Provider
+	store     session.SessionStore
+	config    SubAgentConfig
+	toolMap   map[string]tool.Tool
+	parentBus event.EventBus
 }
 
 func NewSubAgent(
@@ -64,6 +65,10 @@ func NewSubAgent(
 	}
 }
 
+func (sa *SubAgent) SetParentBus(bus event.EventBus) {
+	sa.parentBus = bus
+}
+
 func (sa *SubAgent) Run(ctx context.Context, task string) (string, error) {
 	if sa.provider == nil {
 		return "", fmt.Errorf("sub-agent %q has no provider configured", sa.config.Name)
@@ -80,11 +85,18 @@ func (sa *SubAgent) Run(ctx context.Context, task string) (string, error) {
 	}
 
 	scoped := newScopedRegistry(sa.toolMap)
-	silentBus := &SilentEventBus{}
-	client := llm.NewClient(sa.provider, silentBus)
+
+	var subBus event.EventBus
+	if sa.parentBus != nil {
+		subBus = NewForwardingEventBus(sa.parentBus, sa.config.Name)
+	} else {
+		subBus = &SilentEventBus{}
+	}
+
+	client := llm.NewClient(sa.provider, subBus)
 	subPerm := permission.NewService(permission.ModeAutoAllow, sa.config.AllowedTools)
 
-	ag := New(client, sa.store, scoped, subPerm, silentBus)
+	ag := New(client, sa.store, scoped, subPerm, subBus)
 
 	agentConfig := Config{
 		Model:         sa.config.Model,
@@ -178,6 +190,77 @@ type SilentEventBus struct{}
 func (s *SilentEventBus) Publish(event.Event)                 {}
 func (s *SilentEventBus) Subscribe(event.EventHandler) func() { return func() {} }
 func (s *SilentEventBus) Close()                              {}
+
+type ForwardingEventBus struct {
+	parent event.EventBus
+	prefix string
+}
+
+func NewForwardingEventBus(parent event.EventBus, prefix string) *ForwardingEventBus {
+	return &ForwardingEventBus{
+		parent: parent,
+		prefix: prefix,
+	}
+}
+
+func (f *ForwardingEventBus) Publish(evt event.Event) {
+	if f.parent == nil {
+		return
+	}
+
+	switch evt.Type {
+	case event.EventMessageDelta:
+		if data, ok := evt.Data.(event.MessageDeltaData); ok {
+			f.parent.Publish(event.Event{
+				Type:      event.EventMessageDelta,
+				SessionID: evt.SessionID,
+				Data: event.MessageDeltaData{
+					Text: "[" + f.prefix + "] " + data.Text,
+				},
+				Timestamp: evt.Timestamp,
+			})
+		}
+		if data, ok := evt.Data.(event.ThinkingDeltaData); ok {
+			f.parent.Publish(event.Event{
+				Type:      event.EventMessageDelta,
+				SessionID: evt.SessionID,
+				Data: event.ThinkingDeltaData{
+					Text: "[" + f.prefix + "] " + data.Text,
+				},
+				Timestamp: evt.Timestamp,
+			})
+		}
+	case event.EventToolStart:
+		if data, ok := evt.Data.(event.ToolStartData); ok {
+			f.parent.Publish(event.Event{
+				Type:      event.EventToolStart,
+				SessionID: evt.SessionID,
+				Data: event.ToolStartData{
+					ToolName: "[" + f.prefix + "] " + data.ToolName,
+					Input:    data.Input,
+				},
+				Timestamp: evt.Timestamp,
+			})
+		}
+	case event.EventToolResult:
+		if data, ok := evt.Data.(event.ToolResultData); ok {
+			f.parent.Publish(event.Event{
+				Type:      event.EventToolResult,
+				SessionID: evt.SessionID,
+				Data: event.ToolResultData{
+					ToolName: data.ToolName,
+					Content:  "[" + f.prefix + "] " + data.Content,
+					IsError:  data.IsError,
+					Diff:     data.Diff,
+				},
+				Timestamp: evt.Timestamp,
+			})
+		}
+	}
+}
+
+func (f *ForwardingEventBus) Subscribe(event.EventHandler) func() { return func() {} }
+func (f *ForwardingEventBus) Close()                              {}
 
 func truncateString(s string, maxLen int) string {
 	if len(s) <= maxLen {

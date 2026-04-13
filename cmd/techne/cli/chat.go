@@ -131,6 +131,14 @@ func runInteractive(ctx context.Context, cfg *config.Config, noTools bool, sessi
 	registry.Register(tools.NewSubAgentTool(tools.NewReviewerConfig(cfg.DefaultModel), prov, store, registry))
 	registry.Register(tools.NewSubAgentTool(tools.NewTesterConfig(cfg.DefaultModel), prov, store, registry))
 
+	delegateConfigs := map[string]agent.SubAgentConfig{
+		"researcher": tools.NewResearcherConfig(cfg.DefaultModel),
+		"coder":      tools.NewCoderConfig(cfg.DefaultModel),
+		"reviewer":   tools.NewReviewerConfig(cfg.DefaultModel),
+		"tester":     tools.NewTesterConfig(cfg.DefaultModel),
+	}
+	registry.Register(tools.NewDelegateTool(prov, store, registry, delegateConfigs))
+
 	skillRegistry := skills.NewRegistry()
 	_ = builtin.RegisterAll(skillRegistry)
 
@@ -213,6 +221,14 @@ func runNonInteractive(ctx context.Context, cfg *config.Config, prompt string, n
 	registry.Register(tools.NewSubAgentTool(tools.NewCoderConfig(cfg.DefaultModel), prov, store, registry))
 	registry.Register(tools.NewSubAgentTool(tools.NewReviewerConfig(cfg.DefaultModel), prov, store, registry))
 	registry.Register(tools.NewSubAgentTool(tools.NewTesterConfig(cfg.DefaultModel), prov, store, registry))
+
+	delegateConfigs := map[string]agent.SubAgentConfig{
+		"researcher": tools.NewResearcherConfig(cfg.DefaultModel),
+		"coder":      tools.NewCoderConfig(cfg.DefaultModel),
+		"reviewer":   tools.NewReviewerConfig(cfg.DefaultModel),
+		"tester":     tools.NewTesterConfig(cfg.DefaultModel),
+	}
+	registry.Register(tools.NewDelegateTool(prov, store, registry, delegateConfigs))
 
 	skillRegistry := skills.NewRegistry()
 	_ = builtin.RegisterAll(skillRegistry)

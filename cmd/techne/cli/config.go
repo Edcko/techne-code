@@ -80,7 +80,7 @@ func newConfigInitCmd() *cobra.Command {
 
 			if provider == "ollama" {
 				entry := cfgData.Providers[provider]
-				entry.BaseURL = "http://localhost:11434"
+				entry.BaseURL = "http://localhost:11434/v1"
 				cfgData.Providers[provider] = entry
 			}
 

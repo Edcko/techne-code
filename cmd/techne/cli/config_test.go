@@ -139,8 +139,8 @@ func TestConfigInitWithOllama(t *testing.T) {
 		t.Errorf("expected default_model 'llama3', got %q", cfg.DefaultModel)
 	}
 
-	if cfg.Providers["ollama"].BaseURL != "http://localhost:11434" {
-		t.Errorf("expected base_url for ollama, got %q", cfg.Providers["ollama"].BaseURL)
+	if cfg.Providers["ollama"].BaseURL != "http://localhost:11434/v1" {
+		t.Errorf("expected base_url 'http://localhost:11434/v1' for ollama, got %q", cfg.Providers["ollama"].BaseURL)
 	}
 
 	if cfg.Providers["ollama"].APIKey != "" {

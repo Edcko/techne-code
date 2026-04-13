@@ -563,28 +563,35 @@ func (m *Model) View() tea.View {
 			b.WriteString(UserMessageStyle.Render("You: " + msg.Content))
 		case "assistant":
 			if msg.Thinking != "" {
-				b.WriteString(markdown.RenderThinking(msg.Thinking))
+				wrappedThinking := wrapText(msg.Thinking, m.width)
+				b.WriteString(markdown.RenderThinking(wrappedThinking))
 				b.WriteString("\n")
 			}
 			rendered := markdown.Render(msg.Content)
-			b.WriteString(AssistantMessageStyle.Render("Assistant:\n" + rendered))
+			wrapped := wrapText(rendered, m.width)
+			b.WriteString(AssistantMessageStyle.Render("Assistant:\n" + wrapped))
 		case "tool":
-			b.WriteString(ToolMessageStyle.Render(msg.Content))
+			wrappedTool := wrapText(msg.Content, m.width)
+			b.WriteString(ToolMessageStyle.Render(wrappedTool))
 			if msg.Diff != "" {
 				b.WriteString("\n")
-				b.WriteString(msg.Diff)
+				wrappedDiff := wrapText(msg.Diff, m.width)
+				b.WriteString(wrappedDiff)
 			}
 		case "system":
-			b.WriteString(HelpStyle.Render(msg.Content))
+			wrappedSystem := wrapText(msg.Content, m.width)
+			b.WriteString(HelpStyle.Render(wrappedSystem))
 		case "error":
-			b.WriteString(ErrorMessageStyle.Render("Error: " + msg.Content))
+			wrappedErr := wrapText(msg.Content, m.width)
+			b.WriteString(ErrorMessageStyle.Render("Error: " + wrappedErr))
 		}
 		b.WriteString("\n")
 	}
 
 	if m.state == StateStreaming {
 		if m.thinkingBuffer != "" {
-			b.WriteString(markdown.RenderThinking(m.thinkingBuffer))
+			wrappedThinking := wrapText(m.thinkingBuffer, m.width)
+			b.WriteString(markdown.RenderThinking(wrappedThinking))
 			b.WriteString("\n")
 		} else {
 			b.WriteString(DimStyle.Render("● Thinking..."))

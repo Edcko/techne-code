@@ -1,6 +1,8 @@
 package tui
 
 import (
+	"strings"
+
 	"charm.land/lipgloss/v2"
 )
 
@@ -71,3 +73,69 @@ var (
 			Border(lipgloss.RoundedBorder()).
 			BorderForeground(colorPrimary)
 )
+
+func wrapText(text string, width int) string {
+	if width <= 0 {
+		return text
+	}
+	if width < 10 {
+		width = 10
+	}
+	contentWidth := width - 4
+	if contentWidth < 10 {
+		contentWidth = 10
+	}
+
+	var sb strings.Builder
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		if i > 0 {
+			sb.WriteByte('\n')
+		}
+		if isCodeBlockBorder(line) || isCodeBlockContent(line) || isDiffLine(line) {
+			sb.WriteString(line)
+			continue
+		}
+		sb.WriteString(lipgloss.Wrap(line, contentWidth, " "))
+	}
+	return sb.String()
+}
+
+func isCodeBlockBorder(line string) bool {
+	plain := stripANSIForWrap(line)
+	trimmed := strings.TrimLeft(plain, " \t")
+	return strings.HasPrefix(trimmed, "┌") || strings.HasPrefix(trimmed, "└")
+}
+
+func isCodeBlockContent(line string) bool {
+	plain := stripANSIForWrap(line)
+	trimmed := strings.TrimLeft(plain, " \t")
+	return strings.HasPrefix(trimmed, "│")
+}
+
+func isDiffLine(line string) bool {
+	plain := stripANSIForWrap(line)
+	if len(plain) == 0 {
+		return false
+	}
+	return plain[0] == '+' || plain[0] == '-' || plain[0] == ' '
+}
+
+func stripANSIForWrap(s string) string {
+	var sb strings.Builder
+	esc := false
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\x1b' {
+			esc = true
+			continue
+		}
+		if esc {
+			if (s[i] >= 'a' && s[i] <= 'z') || (s[i] >= 'A' && s[i] <= 'Z') {
+				esc = false
+			}
+			continue
+		}
+		sb.WriteByte(s[i])
+	}
+	return sb.String()
+}
